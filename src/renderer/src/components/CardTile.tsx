@@ -15,6 +15,14 @@ interface Props {
   // Owned-in-foil, per the card-inspect toggle — renders the same shimmer effect as the
   // inspect view, directly over the thumbnail.
   isFoil?: boolean
+  // Set only for cards actually sitting in a deck's own 99 — a search result or Want-list
+  // tile isn't part of the deck yet, so legality doesn't apply to it the same way.
+  illegalReason?: 'color-identity' | 'banned' | null
+}
+
+const ILLEGAL_LABELS: Record<'color-identity' | 'banned', string> = {
+  'color-identity': '⚠ Outside Color Identity',
+  banned: '⚠ Banned in Commander'
 }
 
 export default function CardTile({
@@ -25,7 +33,8 @@ export default function CardTile({
   showBadge,
   onContextMenu,
   marker,
-  isFoil
+  isFoil,
+  illegalReason
 }: Props) {
   const image = card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal
   const markerClass = marker === 'want' ? 'is-wanted' : marker === 'pool' ? 'is-pooled' : ''
@@ -47,6 +56,11 @@ export default function CardTile({
       {card.game_changer && (
         <span className="card-tile__gc-badge" title="Game Changer — a Commander Bracket-defining card">
           GC
+        </span>
+      )}
+      {illegalReason && (
+        <span className="card-tile__illegal-badge" title={ILLEGAL_LABELS[illegalReason]}>
+          {ILLEGAL_LABELS[illegalReason]}
         </span>
       )}
     </button>

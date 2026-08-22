@@ -23,11 +23,13 @@ import type { ScryfallCard } from '../types'
 // Community-standard EDH targets — not hard rules, just the usual rough guidance for a
 // functional 99. Counts come straight from the existing tag system, so this stays in sync
 // with whatever the tagging engine already tracks.
-const BALANCE_TARGETS: { tag: string; label: string; min: number }[] = [
-  { tag: 'Ramp', label: 'Ramp', min: 8 },
-  { tag: 'Removal', label: 'Removal (incl. board wipes)', min: 8 },
-  { tag: 'Card Draw', label: 'Card Draw', min: 8 },
-  { tag: 'Counterspell', label: 'Counterspells', min: 2 }
+const BALANCE_TARGETS: { tags: string[]; label: string; min: number }[] = [
+  { tags: ['Ramp'], label: 'Ramp', min: 8 },
+  // A card tagged both Removal and Board Wipe (e.g. an exile-based wipe) must only count once —
+  // counted as a union over deck cards below, not a per-tag sum, precisely to avoid that.
+  { tags: ['Removal', 'Soft Removal', 'Board Wipe'], label: 'Removal (incl. board wipes)', min: 8 },
+  { tags: ['Card Draw'], label: 'Card Draw', min: 8 },
+  { tags: ['Counterspell'], label: 'Counterspells', min: 2 }
 ]
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -77,7 +79,7 @@ export default function DeckAnalyticsView({
   onAddToWant
 }: Props) {
   const [showAllTags, setShowAllTags] = useState(false)
-  const [balanceFilterTag, setBalanceFilterTag] = useState<string | null>(null)
+  const [balanceFilterRow, setBalanceFilterRow] = useState<{ tags: string[]; label: string } | null>(null)
   const [traitKey, setTraitKey] = useState<string>('')
   const [turn, setTurn] = useState(1)
   const [onThePlay, setOnThePlay] = useState(false)
@@ -125,16 +127,29 @@ export default function DeckAnalyticsView({
 
   const manaCurve = useMemo(() => computeManaCurve(deckCards), [deckCards])
   const curveHealthNotes = useMemo(() => computeCurveHealthNotes(manaCurve), [manaCurve])
-  const tagCountByName = useMemo(() => new Map(deckCardTagCounts.map((t) => [t.tag, t.count])), [deckCardTagCounts])
-  const balanceRows = BALANCE_TARGETS.map((t) => ({ ...t, count: tagCountByName.get(t.tag) ?? 0 }))
-  const underTargetTags = balanceRows.filter((r) => r.count < r.min).map((r) => r.tag)
+  // A union over each deck card's resolved tags, not a sum of per-tag counts — a card carrying
+  // both Removal and Board Wipe (an exile-based wipe, say) must only count once toward
+  // "Removal (incl. board wipes)", and deckCardTagCounts alone can't tell us that since it's
+  // already aggregated per tag, with no way back to which cards overlap.
+  const balanceRows = useMemo(
+    () =>
+      BALANCE_TARGETS.map((t) => {
+        const count = deckCards.filter((card) => {
+          const cardTags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+          return t.tags.some((tag) => cardTags.includes(tag))
+        }).length
+        return { ...t, count }
+      }),
+    [deckCards, cardTagOverrides]
+  )
+  const underTargetRows = balanceRows.filter((r) => r.count < r.min)
 
   // Popularity-ranked suggestions for whichever balance categories are under target, pulled
   // from the local bulk tag index (no network call) — filtered to the deck's own colors and
   // cards it doesn't already run, so every suggestion is one the deck could actually play.
   useEffect(() => {
     let cancelled = false
-    if (underTargetTags.length === 0) {
+    if (underTargetRows.length === 0) {
       setSuggestionsByTag({})
       return
     }
@@ -142,9 +157,18 @@ export default function DeckAnalyticsView({
 
     async function load(): Promise<void> {
       const entries = await Promise.all(
-        underTargetTags.map(async (tag) => {
-          const result = await window.api.searchCardsByTags([tag])
-          const cards = (result as (ScryfallCard & { tags: string[] })[])
+        underTargetRows.map(async (row) => {
+          // Each backing tag is searched (and merged/deduped) separately — searchCardsByTags
+          // ANDs every tag in the array it's given, so passing all of a row's tags at once
+          // would wrongly demand a single card carry all of them instead of any one of them.
+          const perTagResults = await Promise.all(row.tags.map((tag) => window.api.searchCardsByTags([tag])))
+          const merged = new Map<string, ScryfallCard>()
+          for (const result of perTagResults) {
+            for (const c of result as (ScryfallCard & { tags: string[] })[]) {
+              if (!merged.has(c.oracle_id)) merged.set(c.oracle_id, c)
+            }
+          }
+          const cards = [...merged.values()]
             .filter((c) => !deckOracleIdSet.has(c.oracle_id))
             .filter(
               (c) =>
@@ -153,7 +177,7 @@ export default function DeckAnalyticsView({
             )
             .sort((a, b) => (a.edhrec_rank ?? Infinity) - (b.edhrec_rank ?? Infinity))
             .slice(0, 4)
-          return [tag, cards] as const
+          return [row.label, cards] as const
         })
       )
       if (!cancelled) setSuggestionsByTag(Object.fromEntries(entries))
@@ -164,7 +188,7 @@ export default function DeckAnalyticsView({
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [underTargetTags.join(','), deckCards, deckColorIdentity])
+  }, [underTargetRows.map((r) => r.label).join(','), deckCards, deckColorIdentity])
 
   function handleSuggestionContextMenu(card: ScryfallCard, e: React.MouseEvent): void {
     if (!onAddToDeck && !onAddToPool && !onAddToWant) return
@@ -179,11 +203,12 @@ export default function DeckAnalyticsView({
   }
 
   const balanceFilterCards = useMemo(() => {
-    if (!balanceFilterTag) return []
-    return deckCards.filter((card) =>
-      resolveCardTags(card, cardTagOverrides.get(card.oracle_id)).includes(balanceFilterTag)
-    )
-  }, [balanceFilterTag, deckCards, cardTagOverrides])
+    if (!balanceFilterRow) return []
+    return deckCards.filter((card) => {
+      const cardTags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+      return balanceFilterRow.tags.some((tag) => cardTags.includes(tag))
+    })
+  }, [balanceFilterRow, deckCards, cardTagOverrides])
   const pipCounts = useMemo(() => computePipCounts(deckCards), [deckCards])
   const typeBreakdown = useMemo(() => computeTypeBreakdown(deckCards), [deckCards])
   const idealBasics = useMemo(
@@ -424,9 +449,9 @@ export default function DeckAnalyticsView({
         </div>
         {balanceRows.map((row) => (
           <button
-            key={row.tag}
+            key={row.label}
             className="basic-split-table__row basic-split-table__row--clickable"
-            onClick={() => setBalanceFilterTag(row.tag)}
+            onClick={() => setBalanceFilterRow(row)}
             title={`See which cards count as ${row.label}`}
           >
             <span>{row.label}</span>
@@ -436,14 +461,14 @@ export default function DeckAnalyticsView({
         ))}
       </div>
 
-      {underTargetTags.length > 0 && (
+      {underTargetRows.length > 0 && (
         <div className="deck-balance__suggestions">
-          {underTargetTags.map((tag) => {
-            const cards = suggestionsByTag[tag]
+          {underTargetRows.map((row) => {
+            const cards = suggestionsByTag[row.label]
             if (!cards || cards.length === 0) return null
             return (
-              <div key={tag} className="deck-balance__suggestion-row">
-                <span className="deck-balance__suggestion-tag">{tag}</span>
+              <div key={row.label} className="deck-balance__suggestion-row">
+                <span className="deck-balance__suggestion-tag">{row.label}</span>
                 <div className="deck-balance__suggestion-tiles">
                   {cards.map((card) => (
                     <CardTile
@@ -462,11 +487,11 @@ export default function DeckAnalyticsView({
       </div>
       </section>
 
-      {balanceFilterTag && (
+      {balanceFilterRow && (
         <div className="deck-tag-filter">
           <div className="deck-tag-filter__header">
-            <h3 className="section-heading">Cards tagged "{balanceFilterTag}"</h3>
-            <button className="deck-tag-filter__close" onClick={() => setBalanceFilterTag(null)} aria-label="Close">
+            <h3 className="section-heading">Cards tagged "{balanceFilterRow.label}"</h3>
+            <button className="deck-tag-filter__close" onClick={() => setBalanceFilterRow(null)} aria-label="Close">
               ×
             </button>
           </div>

@@ -121,6 +121,32 @@ export async function getSets(): Promise<unknown> {
   return getJson(`${API_BASE}/sets`)
 }
 
+// /cards/autocomplete is a lightweight name-only lookup (not in the "heavy" list above) meant
+// for exactly this — firing on every keystroke of a search-as-you-type box. It returns just
+// matching names, no card data/images, which is what makes it fast enough to skip debouncing.
+// Superseded as the deck builder's dropdown source by getCardNameCatalog below (zero network
+// latency per keystroke instead of one round-trip), but left in place — still used as-is
+// nowhere else yet, and cheap to keep around.
+export async function autocompleteCardNames(query: string): Promise<unknown> {
+  if (!query.trim()) return { object: 'catalog', data: [] }
+  return getJson(`${API_BASE}/cards/autocomplete?q=${encodeURIComponent(query)}`)
+}
+
+// The full list of English card names (~30k strings, one JSON payload) barely changes between
+// Magic releases, so it's fetched once per app run and cached in memory — every keystroke
+// after that first fetch filters this array locally with zero network round-trip, which is
+// what makes the dropdown feel instant rather than merely "fast".
+let cardNameCatalogCache: string[] | null = null
+
+export async function getCardNameCatalog(): Promise<unknown> {
+  if (cardNameCatalogCache) return { object: 'catalog', data: cardNameCatalogCache }
+  const result = await getJson(`${API_BASE}/catalog/card-names`)
+  if (!isScryfallError(result)) {
+    cardNameCatalogCache = (result as { data?: string[] }).data ?? []
+  }
+  return result
+}
+
 // POST /cards/collection accepts at most 75 identifiers per call.
 const COLLECTION_BATCH_SIZE = 75
 
@@ -143,6 +169,74 @@ export async function getCardsByIds(ids: string[]): Promise<unknown> {
 
   const byId = new Map(results.map((c) => [(c as { id: string }).id, c]))
   return { object: 'list', data: ids.map((id) => byId.get(id)).filter(Boolean) }
+}
+
+/** Batch-resolves exact (set, collector_number) pairs to their specific printings — used for
+ *  precon decklists (see main/precons.ts), which know exactly which printing each card ships
+ *  as and shouldn't get some other/newer printing substituted in. Returns one card per
+ *  requested pair; pairs Scryfall couldn't find come back in `not_found` (as "set/number"
+ *  strings) rather than silently vanishing, since a precon list quietly missing cards is worse
+ *  than a decklist import quietly missing cards — this one has no user to notice at import time. */
+export async function getCardsBySetAndNumber(
+  pairs: { set: string; collectorNumber: string }[],
+  onProgress?: (resolved: number, total: number) => void
+): Promise<unknown> {
+  const key = (p: { set: string; collectorNumber: string }): string => `${p.set}/${p.collectorNumber}`
+  const uniquePairs = [...new Map(pairs.map((p) => [key(p), p])).values()]
+  const results: unknown[] = []
+  const notFound: string[] = []
+
+  for (let i = 0; i < uniquePairs.length; i += COLLECTION_BATCH_SIZE) {
+    const batch = uniquePairs.slice(i, i + COLLECTION_BATCH_SIZE)
+    const body = await getJson(`${API_BASE}/cards/collection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifiers: batch.map((p) => ({ set: p.set, collector_number: p.collectorNumber }))
+      })
+    })
+    if (isScryfallError(body)) return body
+    const data = (body as { data?: unknown[] })?.data ?? []
+    const missing = (body as { not_found?: { set?: string; collector_number?: string }[] })?.not_found ?? []
+    results.push(...data)
+    notFound.push(...missing.filter((m) => m.set && m.collector_number).map((m) => `${m.set}/${m.collector_number}`))
+    onProgress?.(Math.min(i + COLLECTION_BATCH_SIZE, uniquePairs.length), uniquePairs.length)
+  }
+
+  const byKey = new Map(
+    results.map((c) => [key({ set: (c as { set: string }).set, collectorNumber: (c as { collector_number: string }).collector_number }), c])
+  )
+  return {
+    object: 'list',
+    data: pairs.map((p) => byKey.get(key(p))).filter(Boolean),
+    not_found: notFound
+  }
+}
+
+/** Batch-resolves card names to full card objects (their most-recent printing, same as
+ *  Scryfall's own name-based collection lookup) — one or two heavy-throttled calls total for
+ *  an entire decklist import, instead of one search per card. Names that don't resolve come
+ *  back in `not_found` so the caller can report exactly which lines of a pasted list failed. */
+export async function getCardsByNames(names: string[]): Promise<unknown> {
+  const uniqueNames = [...new Set(names)]
+  const results: unknown[] = []
+  const notFound: string[] = []
+
+  for (let i = 0; i < uniqueNames.length; i += COLLECTION_BATCH_SIZE) {
+    const batch = uniqueNames.slice(i, i + COLLECTION_BATCH_SIZE)
+    const body = await getJson(`${API_BASE}/cards/collection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifiers: batch.map((name) => ({ name })) })
+    })
+    if (isScryfallError(body)) return body
+    const data = (body as { data?: unknown[] })?.data ?? []
+    const missing = (body as { not_found?: { name?: string }[] })?.not_found ?? []
+    results.push(...data)
+    notFound.push(...missing.map((m) => m.name).filter((n): n is string => Boolean(n)))
+  }
+
+  return { object: 'list', data: results, not_found: notFound }
 }
 
 // Used for card-relative links Scryfall itself hands back (prints_search_uri, rulings_uri,

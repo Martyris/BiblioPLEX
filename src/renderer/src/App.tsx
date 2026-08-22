@@ -8,10 +8,12 @@ import CommanderView from './components/CommanderView'
 import CommanderPicker from './components/CommanderPicker'
 import DecksBrowser from './components/DecksBrowser'
 import DeckBuilder from './components/DeckBuilder'
+import PreconsBrowser from './components/PreconsBrowser'
+import PreconDeckView from './components/PreconDeckView'
 import { BASE_EXCLUSION_TERMS, buildQuery, EMPTY_FILTERS, EXCLUDE_TOKENS_TERM, type FilterState } from './queryBuilder'
 import type { ScryfallCard, ScryfallSet } from './types'
 
-type Tab = 'search' | 'sets' | 'tokens' | 'commander' | 'decks'
+type Tab = 'search' | 'sets' | 'tokens' | 'commander' | 'precons' | 'decks'
 
 interface SetsTabViewProps {
   mode: 'sets' | 'tokens'
@@ -81,6 +83,16 @@ function DecksTabView() {
   return <DecksBrowser onOpenDeck={setDeckId} />
 }
 
+function PreconsTabView() {
+  const [preconId, setPreconId] = useState<string | null>(null)
+
+  if (preconId) {
+    return <PreconDeckView preconId={preconId} onBack={() => setPreconId(null)} />
+  }
+
+  return <PreconsBrowser onOpenPrecon={setPreconId} />
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('search')
   const [selected, setSelected] = useState<ScryfallCard | null>(null)
@@ -115,6 +127,9 @@ export default function App() {
           </button>
           <button className={tab === 'commander' ? 'is-active' : ''} onClick={() => setTab('commander')}>
             Commander
+          </button>
+          <button className={tab === 'precons' ? 'is-active' : ''} onClick={() => setTab('precons')}>
+            Precons
           </button>
           <button className={tab === 'decks' ? 'is-active' : ''} onClick={() => setTab('decks')}>
             Decks
@@ -156,6 +171,7 @@ export default function App() {
         {tab === 'sets' && <SetsTabView mode="sets" onSelectCard={setSelected} />}
         {tab === 'tokens' && <SetsTabView mode="tokens" onSelectCard={setSelected} />}
         {tab === 'commander' && <CommanderTabView onSelectCard={setSelected} />}
+        {tab === 'precons' && <PreconsTabView />}
         {tab === 'decks' && <DecksTabView />}
       </main>
 

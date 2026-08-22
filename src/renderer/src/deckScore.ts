@@ -66,6 +66,50 @@ function rangeCategory(key: string, label: string, value: number, spec: RangeSpe
   return { key, label, score: rangeScore(value, spec), detail: directionalDetail(value, spec, noun) }
 }
 
+/** For traits where more is only a problem if it came at some other category's expense —
+ *  Ramp, Card Draw, and Removal all compete for the same 100 card slots, but overshooting one
+ *  of them isn't actually a flaw unless it left a DIFFERENT category short. If every other
+ *  category is already at or above its own minimum, extra ramp/draw/interaction is just a
+ *  strength, not something to trim — so no penalty applies above `max` in that case. Below
+ *  `min` is penalized exactly like rangeScore always has — undershooting is never fine. */
+function positiveRangeScore(value: number, spec: RangeSpec, otherCategoriesNeedHelp: boolean): number {
+  if (value > spec.max && !otherCategoriesNeedHelp) return 100
+  return rangeScore(value, spec)
+}
+
+function positiveDirectionalDetail(
+  value: number,
+  { min, max }: RangeSpec,
+  noun: string,
+  otherCategoriesNeedHelp: boolean
+): string {
+  if (value < min) return `${value} ${noun} — below the ideal ${min}-${max}. Consider adding more.`
+  if (value > max) {
+    return otherCategoriesNeedHelp
+      ? `${value} ${noun} — above the ideal ${min}-${max}, and another category below still needs cards — ` +
+        `consider trimming a few of these in favor of that one.`
+      : `${value} ${noun} — above the ideal ${min}-${max}, but every other category is already on target, so ` +
+        `this isn't a problem — extra ${noun} here is a strength, not something to trim.`
+  }
+  return `${value} ${noun} — right in the ideal ${min}-${max} range.`
+}
+
+function positiveRangeCategory(
+  key: string,
+  label: string,
+  value: number,
+  spec: RangeSpec,
+  noun: string,
+  otherCategoriesNeedHelp: boolean
+): ScoreCategory {
+  return {
+    key,
+    label,
+    score: positiveRangeScore(value, spec, otherCategoriesNeedHelp),
+    detail: positiveDirectionalDetail(value, spec, noun, otherCategoriesNeedHelp)
+  }
+}
+
 /** For traits where more is strictly never bad (synergy with the commander, unlike ramp or
  *  removal where too much crowds out the rest of the deck) — 100 once `min` is met or beaten,
  *  falling off below it. No upper penalty, ever. */
@@ -90,8 +134,17 @@ export interface ArchetypeAdjustment {
   label: string
   // Matches against the commander's own EDHREC theme tag slugs — a commander tagged
   // "spellslinger" is normally BUILT that way, which is a reasonable proxy for how this
-  // specific deck should be judged even before checking its actual card choices.
+  // specific deck should be judged even before checking its actual card choices. But it's only
+  // a proxy: EDHREC ranks by how most people build that commander, not how *this* deck was
+  // built, so a commander popular for one plan can still get built as a different one (Zimone
+  // is EDHREC-popular as Spellslinger even when a specific build is actually ramp-into-X-
+  // spells) — deckTagSignal below is the escape hatch for exactly that mismatch.
   matchTagSlugs: string[]
+  // An alternative, deck-composition-based signal: if this many (or more) of the deck's OWN
+  // cards carry this Card Tag, that's stronger, more specific evidence of the deck's actual
+  // game plan than the commander's generic EDHREC popularity — checked alongside
+  // matchTagSlugs and whichever signal is strongest (highest count) wins.
+  deckTagSignal?: { tag: string; threshold: number }
   overrides: Partial<Record<AdjustableCategory, RangeSpec>>
   note: string
 }
@@ -217,7 +270,12 @@ const ARCHETYPE_ADJUSTMENTS: ArchetypeAdjustment[] = [
   {
     key: 'big-creatures',
     matchTagSlugs: ['big-creatures', 'stompy'],
-    label: 'Big Creatures',
+    // 15+ cards carrying the deck's own "X Cost Matters" tag is a strong, specific signal that
+    // this build's whole plan is ramping into big X-cost payoffs — worth outweighing whatever
+    // EDHREC's generic tag popularity says about the commander, since that's an average across
+    // every build of the commander, not a read on this particular deck.
+    deckTagSignal: { tag: 'X Cost Matters', threshold: 15 },
+    label: 'Big Spells',
     overrides: {
       ramp: { min: 12, max: 18, tolerance: 8 }
     },
@@ -239,11 +297,18 @@ export interface CommanderTagRef {
 
 /** Picks exactly one archetype's adjustments to apply — never stacks several at once, since
  *  a deck is built around one primary game plan and mixing targets would blur rather than
- *  sharpen them. `archetypeKey` of 'none' turns adjustments off entirely; 'auto' (or
- *  omitted) picks whichever matching archetype is the commander's most popular EDHREC tag;
- *  any other value forces that specific archetype regardless of what EDHREC says. */
+ *  sharpen them. `archetypeKey` of 'none' turns adjustments off entirely; 'auto' (or omitted)
+ *  prefers a deckTagSignal match (this specific deck's own Card Tag composition) over the
+ *  commander's EDHREC popularity, falling back to EDHREC only if no deckTagSignal clears its
+ *  threshold; any other value forces that specific archetype regardless of either signal.
+ *  deckTagSignal and matchTagSlugs are deliberately NOT compared by raw count against each
+ *  other — EDHREC's tag counts are "decks on EDHREC" (can run into the hundreds) while a Card
+ *  Tag count is "cards in this 100-card deck," an entirely different scale, so whichever
+ *  happened to have the bigger number would silently win regardless of which signal actually
+ *  says more about this deck. */
 function resolveArchetypeAdjustments(
   commanderTags: CommanderTagRef[],
+  deckCardTagCounts: { tag: string; count: number }[],
   archetypeKey: string | undefined
 ): {
   overrides: Partial<Record<AdjustableCategory, RangeSpec>>
@@ -257,14 +322,27 @@ function resolveArchetypeAdjustments(
   if (archetypeKey && archetypeKey !== 'auto') {
     chosen = ARCHETYPE_ADJUSTMENTS.find((a) => a.key === archetypeKey) ?? null
   } else {
-    const countBySlug = new Map(commanderTags.map((t) => [t.slug.toLowerCase(), t.count]))
-    let bestCount = -1
+    const deckCountByTag = new Map(deckCardTagCounts.map((t) => [t.tag, t.count]))
+    let deckSignalBest = -1
     for (const a of ARCHETYPE_ADJUSTMENTS) {
-      for (const slug of a.matchTagSlugs) {
-        const count = countBySlug.get(slug)
-        if (count !== undefined && count > bestCount) {
-          bestCount = count
-          chosen = a
+      if (!a.deckTagSignal) continue
+      const deckCount = deckCountByTag.get(a.deckTagSignal.tag) ?? 0
+      if (deckCount >= a.deckTagSignal.threshold && deckCount > deckSignalBest) {
+        deckSignalBest = deckCount
+        chosen = a
+      }
+    }
+
+    if (!chosen) {
+      const countBySlug = new Map(commanderTags.map((t) => [t.slug.toLowerCase(), t.count]))
+      let bestCount = -1
+      for (const a of ARCHETYPE_ADJUSTMENTS) {
+        for (const slug of a.matchTagSlugs) {
+          const count = countBySlug.get(slug)
+          if (count !== undefined && count > bestCount) {
+            bestCount = count
+            chosen = a
+          }
         }
       }
     }
@@ -308,7 +386,7 @@ export function computeDeckScore(params: {
     overrides,
     applied: appliedArchetype,
     note: archetypeNote
-  } = resolveArchetypeAdjustments(params.commanderTags ?? [], params.archetypeKey)
+  } = resolveArchetypeAdjustments(params.commanderTags ?? [], deckCardTagCounts, params.archetypeKey)
   const rangeFor = (key: AdjustableCategory, fallback: RangeSpec): RangeSpec => overrides[key] ?? fallback
 
   const landCount = deckCards.filter((c) => categorizeCard(c) === 'Land').length
@@ -317,29 +395,44 @@ export function computeDeckScore(params: {
   const removalCount = countTag(deckCardTagCounts, 'Removal', 'Soft Removal')
   const wipeCount = countTag(deckCardTagCounts, 'Board Wipe')
 
+  const landsSpec = rangeFor('lands', { min: 34, max: 38, tolerance: 8 })
+  const rampSpec = rangeFor('ramp', { min: 8, max: 12, tolerance: 8 })
+  const drawSpec = rangeFor('draw', { min: 8, max: 12, tolerance: 8 })
+  const removalSpec = rangeFor('removal', { min: 8, max: 12, tolerance: 8 })
+  const wipesSpec = rangeFor('wipes', { min: 2, max: 4, tolerance: 4 })
+
+  // Land Count and Board Wipes stay bidirectional (too many lands crowds out spells; too many
+  // wipes can hurt your own board) — only Ramp/Draw/Removal get the overshoot-forgiveness
+  // treatment, since a category needing help below is the only reason an overshoot elsewhere
+  // is actually a cost rather than just a strength.
+  const belowMin = {
+    lands: landCount < landsSpec.min,
+    ramp: rampCount < rampSpec.min,
+    draw: drawCount < drawSpec.min,
+    removal: removalCount < removalSpec.min,
+    wipes: wipeCount < wipesSpec.min
+  }
+  const otherCategoriesNeedHelp = (exclude: keyof typeof belowMin): boolean =>
+    Object.entries(belowMin).some(([key, isBelow]) => key !== exclude && isBelow)
+
   const categories: ScoreCategory[] = []
 
+  categories.push(rangeCategory('lands', 'Land Count', landCount, landsSpec, 'lands'))
+  categories.push(positiveRangeCategory('ramp', 'Ramp', rampCount, rampSpec, 'pieces', otherCategoriesNeedHelp('ramp')))
   categories.push(
-    rangeCategory('lands', 'Land Count', landCount, rangeFor('lands', { min: 34, max: 38, tolerance: 8 }), 'lands')
+    positiveRangeCategory('draw', 'Card Draw', drawCount, drawSpec, 'pieces', otherCategoriesNeedHelp('draw'))
   )
   categories.push(
-    rangeCategory('ramp', 'Ramp', rampCount, rangeFor('ramp', { min: 8, max: 12, tolerance: 8 }), 'pieces')
-  )
-  categories.push(
-    rangeCategory('draw', 'Card Draw', drawCount, rangeFor('draw', { min: 8, max: 12, tolerance: 8 }), 'pieces')
-  )
-  categories.push(
-    rangeCategory(
+    positiveRangeCategory(
       'removal',
       'Removal & Interaction',
       removalCount,
-      rangeFor('removal', { min: 8, max: 12, tolerance: 8 }),
-      'pieces'
+      removalSpec,
+      'pieces',
+      otherCategoriesNeedHelp('removal')
     )
   )
-  categories.push(
-    rangeCategory('wipes', 'Board Wipes', wipeCount, rangeFor('wipes', { min: 2, max: 4, tolerance: 4 }), 'pieces')
-  )
+  categories.push(rangeCategory('wipes', 'Board Wipes', wipeCount, wipesSpec, 'pieces'))
 
   const curve = computeManaCurve(deckCards)
   const curveNotes = computeCurveHealthNotes(curve)

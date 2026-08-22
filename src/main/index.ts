@@ -6,13 +6,33 @@ import {
   getCardById,
   getCardByFuzzyName,
   getCardsByIds,
+  getCardsByNames,
   getSets,
   fetchScryfallUrl,
+  autocompleteCardNames,
+  getCardNameCatalog,
   type SearchOptions
 } from './scryfall'
 import { getCommanderData, getTopCommanders, getCommanderTagIndex } from './edhrec'
 import { findMyCombos } from './commanderSpellbook'
-import { listDecks, getDeck, createDeck, updateDeck, deleteDeck, reorderDecks, type DeckPatch } from './deckStore'
+import {
+  listDecks,
+  getDeck,
+  createDeck,
+  updateDeck,
+  deleteDeck,
+  duplicateDeck,
+  reorderDecks,
+  createDeckFromPrecon,
+  type DeckPatch
+} from './deckStore'
+import {
+  getPreconStatus,
+  getPreconBuildProgress,
+  buildPreconLibrary,
+  listPrecons,
+  getPrecon
+} from './precons'
 import {
   getCardTagOverride,
   setCardTagOverride,
@@ -29,8 +49,8 @@ import {
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    width: 1450,
+    height: 816,
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -78,6 +98,14 @@ app.whenReady().then(() => {
     return getSets()
   })
 
+  ipcMain.handle('scryfall:autocomplete', async (_event, query: string) => {
+    return autocompleteCardNames(query)
+  })
+
+  ipcMain.handle('scryfall:card-name-catalog', async () => {
+    return getCardNameCatalog()
+  })
+
   ipcMain.handle('scryfall:url', async (_event, url: string) => {
     return fetchScryfallUrl(url)
   })
@@ -100,6 +128,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('scryfall:collection', async (_event, ids: string[]) => {
     return getCardsByIds(ids)
+  })
+
+  ipcMain.handle('scryfall:collection-by-name', async (_event, names: string[]) => {
+    return getCardsByNames(names)
   })
 
   ipcMain.handle('decks:list', async () => {
@@ -132,8 +164,34 @@ app.whenReady().then(() => {
     return deleteDeck(id)
   })
 
+  ipcMain.handle('decks:duplicate', async (_event, id: string) => {
+    return duplicateDeck(id)
+  })
+
   ipcMain.handle('decks:reorder', async (_event, orderedIds: string[]) => {
     return reorderDecks(orderedIds)
+  })
+
+  ipcMain.handle('precons:status', async () => {
+    return getPreconStatus()
+  })
+
+  ipcMain.handle('precons:build-progress', async () => {
+    return getPreconBuildProgress()
+  })
+
+  ipcMain.handle('precons:build', async () => {
+    return buildPreconLibrary()
+  })
+
+  ipcMain.handle('precons:list', async () => {
+    return listPrecons()
+  })
+
+  ipcMain.handle('precons:copy-to-my-decks', async (_event, id: string) => {
+    const precon = await getPrecon(id)
+    if (!precon) return null
+    return createDeckFromPrecon(precon)
   })
 
   ipcMain.handle('cardtags:get-override', async (_event, oracleId: string) => {

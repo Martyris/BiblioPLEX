@@ -1,6 +1,6 @@
 import CardTile from './CardTile'
 import type { SortOption } from './SortControl'
-import { useCardResults } from '../useCardResults'
+import { useCardResults, type CardResultsState } from '../useCardResults'
 import type { ScryfallCard } from '../types'
 
 interface Props {
@@ -20,6 +20,10 @@ interface Props {
   // enables the foreign-language-name fallback (see useCardResults). Omit where there's no
   // free-text box (e.g. a set browser with no search input).
   rawText?: string
+  // Pre-fetched results (e.g. a parent that also drives a search-as-you-type dropdown off the
+  // same query) — supply this to skip this component's own useCardResults call and avoid
+  // firing the same Scryfall search twice.
+  results?: CardResultsState
 }
 
 export default function CardResults({
@@ -31,9 +35,11 @@ export default function CardResults({
   badgeLabel,
   getBadge,
   getMarker,
-  rawText
+  rawText,
+  results
 }: Props) {
-  const { cards, total, hasMore, loading, loadingMore, error, loadMore } = useCardResults(query, sort, rawText)
+  const ownResults = useCardResults(results ? '' : query, sort, results ? '' : rawText)
+  const { cards, total, hasMore, loading, loadingMore, error, loadMore } = results ?? ownResults
   const isEmpty = query.trim() === ''
 
   return (

@@ -230,4 +230,7 @@ export interface StoredDeck {
   // decks list so a score is visible without opening every deck. Not live; only as fresh as
   // the last time someone looked at that deck's Score tab.
   lastScore: { overall: number; grade: string; recordedAt: string } | null
+  // Up to 3 tags (from the auto-detected Card Tags list) the player has singled out as this
+  // deck's defining mechanics — shown on the "My Decks" tile. Capped at 3 in the UI, not here.
+  coreMechanicTags: string[]
 }

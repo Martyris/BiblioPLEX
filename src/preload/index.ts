@@ -34,6 +34,7 @@ interface DeckPatch {
   wantIds?: string[]
   foilIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
+  coreMechanicTags?: string[]
 }
 
 const api = {
@@ -42,8 +43,11 @@ const api = {
   getCard: (id: string) => ipcRenderer.invoke('scryfall:card', id),
   getCardByFuzzyName: (name: string) => ipcRenderer.invoke('scryfall:named-fuzzy', name),
   getSets: () => ipcRenderer.invoke('scryfall:sets'),
+  autocompleteCardNames: (query: string) => ipcRenderer.invoke('scryfall:autocomplete', query),
+  getCardNameCatalog: () => ipcRenderer.invoke('scryfall:card-name-catalog'),
   fetchScryfallUrl: (url: string) => ipcRenderer.invoke('scryfall:url', url),
   getCardsByIds: (ids: string[]) => ipcRenderer.invoke('scryfall:collection', ids),
+  getCardsByNames: (names: string[]) => ipcRenderer.invoke('scryfall:collection-by-name', names),
   getCommanderData: (cardName: string, tagSlug?: string) =>
     ipcRenderer.invoke('edhrec:commander', cardName, tagSlug),
   getTopCommanders: () => ipcRenderer.invoke('edhrec:top-commanders'),
@@ -61,7 +65,13 @@ const api = {
   ) => ipcRenderer.invoke('decks:create', name, commanderId, commanderName, partnerCommanderId, partnerCommanderName),
   updateDeck: (id: string, patch: DeckPatch) => ipcRenderer.invoke('decks:update', id, patch),
   deleteDeck: (id: string) => ipcRenderer.invoke('decks:delete', id),
+  duplicateDeck: (id: string) => ipcRenderer.invoke('decks:duplicate', id),
   reorderDecks: (orderedIds: string[]) => ipcRenderer.invoke('decks:reorder', orderedIds),
+  getPreconStatus: () => ipcRenderer.invoke('precons:status'),
+  getPreconBuildProgress: () => ipcRenderer.invoke('precons:build-progress'),
+  buildPreconLibrary: () => ipcRenderer.invoke('precons:build'),
+  listPrecons: () => ipcRenderer.invoke('precons:list'),
+  copyPreconToMyDecks: (id: string) => ipcRenderer.invoke('precons:copy-to-my-decks', id),
   getCardTagOverride: (oracleId: string) => ipcRenderer.invoke('cardtags:get-override', oracleId),
   setCardTagOverride: (oracleId: string, override: CardTagOverride) =>
     ipcRenderer.invoke('cardtags:set-override', oracleId, override),

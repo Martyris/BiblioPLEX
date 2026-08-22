@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { isError, type ScryfallCard, type ScryfallSearchResult, type SearchResponse } from './types'
 import type { SortOption } from './components/SortControl'
 
-interface CardResultsState {
+export interface CardResultsState {
   cards: ScryfallCard[]
   total: number | null
   hasMore: boolean

@@ -47,6 +47,9 @@ export interface StoredDeck {
   wantIds: string[]
   foilIds: string[]
   lastScore: { overall: number; grade: string; recordedAt: string } | null
+  // Up to 3 tags (from the auto-detected Card Tags list) the player has singled out as this
+  // deck's defining mechanics — shown on the "My Decks" tile. Capped at 3 in the UI, not here.
+  coreMechanicTags: string[]
 }
 
 let cache: StoredDeck[] | null = null
@@ -102,7 +105,8 @@ async function load(): Promise<StoredDeck[]> {
       cardPoolIds: d.cardPoolIds ?? [],
       wantIds: d.wantIds ?? [],
       foilIds: d.foilIds ?? [],
-      lastScore: d.lastScore ?? null
+      lastScore: d.lastScore ?? null,
+      coreMechanicTags: d.coreMechanicTags ?? []
     }))
   } catch {
     cache = []
@@ -154,7 +158,8 @@ export async function createDeck(
     cardPoolIds: [],
     wantIds: [],
     foilIds: [],
-    lastScore: null
+    lastScore: null,
+    coreMechanicTags: []
   }
   await persist([...decks, deck])
   return deck
@@ -176,6 +181,7 @@ export interface DeckPatch {
   wantIds?: string[]
   foilIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
+  coreMechanicTags?: string[]
 }
 
 export async function updateDeck(id: string, patch: DeckPatch): Promise<StoredDeck | null> {
@@ -193,6 +199,77 @@ export async function updateDeck(id: string, patch: DeckPatch): Promise<StoredDe
 export async function deleteDeck(id: string): Promise<void> {
   const decks = await load()
   await persist(decks.filter((d) => d.id !== id))
+}
+
+/** Materializes a precon (see main/precons.ts) as a real, fully editable user deck — a plain
+ *  copy of its commander/cardIds under a fresh id, same as any other new deck otherwise. */
+export async function createDeckFromPrecon(precon: {
+  name: string
+  commanderId: string
+  commanderName: string
+  partnerCommanderId: string | null
+  partnerCommanderName: string | null
+  cardIds: string[]
+}): Promise<StoredDeck> {
+  const decks = await load()
+  const now = new Date().toISOString()
+  const maxOrder = decks.reduce((max, d) => Math.max(max, d.order), -1)
+  const deck: StoredDeck = {
+    id: randomUUID(),
+    name: precon.name,
+    commanderId: precon.commanderId,
+    commanderName: precon.commanderName,
+    partnerCommanderId: precon.partnerCommanderId,
+    partnerCommanderName: precon.partnerCommanderName,
+    cardIds: [...precon.cardIds],
+    tags: [],
+    bracket: null,
+    wins: 0,
+    losses: 0,
+    order: maxOrder + 1,
+    createdAt: now,
+    updatedAt: now,
+    tokenPrintingOverrides: {},
+    cardPoolIds: [],
+    wantIds: [],
+    foilIds: [],
+    lastScore: null,
+    coreMechanicTags: []
+  }
+  await persist([...decks, deck])
+  return deck
+}
+
+/** Copies a deck's full build (cardIds, tags, bracket, pool/want/foil lists, core mechanics,
+ *  etc.) under a new id, appended to the end of the list. Match record and score are reset —
+ *  those describe the ORIGINAL deck's play history, not something a fresh copy inherits. */
+export async function duplicateDeck(id: string): Promise<StoredDeck | null> {
+  const decks = await load()
+  const original = decks.find((d) => d.id === id)
+  if (!original) return null
+
+  const now = new Date().toISOString()
+  const maxOrder = decks.reduce((max, d) => Math.max(max, d.order), -1)
+  const copy: StoredDeck = {
+    ...original,
+    id: randomUUID(),
+    name: `${original.name} (Copy)`,
+    cardIds: [...original.cardIds],
+    tags: original.tags.map((t) => ({ ...t })),
+    tokenPrintingOverrides: { ...original.tokenPrintingOverrides },
+    cardPoolIds: [...original.cardPoolIds],
+    wantIds: [...original.wantIds],
+    foilIds: [...original.foilIds],
+    coreMechanicTags: [...original.coreMechanicTags],
+    order: maxOrder + 1,
+    createdAt: now,
+    updatedAt: now,
+    wins: 0,
+    losses: 0,
+    lastScore: null
+  }
+  await persist([...decks, copy])
+  return copy
 }
 
 /** Reassigns `order` for every deck to match the given id sequence (drag-reorder in the

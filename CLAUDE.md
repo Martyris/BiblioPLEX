@@ -52,8 +52,36 @@ the Gotchas section below, it directly controls where user data lives on disk.
 
 Tabs in `App.tsx`: **Search** (filtered card search, `FilterPanel` + `CardResults`), **Sets**
 (browse by expansion), **Tokens** (token-only sets, separate from Sets), **Commander** (browse
-EDHREC top commanders or search, view recommendations via `CommanderView`), **Decks** (the deck
+EDHREC top commanders or search, view recommendations via `CommanderView`), **Precons** (browse
+every Commander preconstructed deck EDHREC has catalogued — see below), **Decks** (the deck
 builder — `DecksBrowser` list + `DeckBuilder` editor).
+
+**Precons** (`src/main/precons.ts`, `PreconsBrowser.tsx`, `PreconDeckView.tsx`): a read-only
+library of every historical (2011+) Commander precon, each resolved to its exact decklist
+(specific printings, correct basic-land counts) via EDHREC's own `/precon` catalog page and
+per-precon `/precon/<slug>` detail pages (`getPreconCatalog`/`getPreconDeckDetail` in
+`edhrec.ts`) — not reconstructed from a Scryfall set search, since one Scryfall set can bundle
+several distinct precons (e.g. `msc` → 4 separate Marvel precons) and a naive set search can't
+tell them apart or recover a basic land's real printed count.
+- **Build is incremental** (`buildPreconLibrary` in `precons.ts`): a precon already saved from
+  a prior build (matching `PRECON_BUILD_VERSION`) is reused as-is; only precons new to EDHREC's
+  catalog, or ones previously skipped (retried in case they now resolve), get fetched. First
+  build of all ~160 precons takes several minutes (mostly Scryfall's throttled `/cards/collection`
+  batch-resolving exact `(set, collector_number)` printings — reports live progress via
+  `getPreconBuildProgress`); subsequent "Check for New Precons" runs are near-instant once
+  nothing's new. Bump `PRECON_BUILD_VERSION` to force a full rebuild if the build logic changes
+  what ends up in `precons.json`.
+- Precons list (`PreconsBrowser.tsx`) mirrors `DecksBrowser.tsx`'s tile layout and name/color
+  filter bar (no bracket or core-mechanic filters — precons don't carry those fields), sorted by
+  release date descending, with a restricted ⋮ menu (**Copy to My Decks**, **Export** — no
+  Duplicate/Delete, since precons aren't user-owned decks).
+- Precon viewer (`PreconDeckView.tsx`) mirrors `DeckBuilder.tsx`'s commander header and category
+  sidebar/TOC (jump-to-category nav + collapsible sections), with **Export** and **Copy to My
+  Decks** buttons in its own toolbar too. No Add Cards, Hot Swap, EDHREC tab, Card Pool/Want, or
+  printing-swap — a precon can be inspected and copied, never edited in place.
+- `createDeckFromPrecon` (`deckStore.ts`) is what "Copy to My Decks" actually calls — builds a
+  fresh editable `StoredDeck` from a `PreconDeck`'s data, same field population as
+  `duplicateDeck`.
 
 Deck builder (`DeckBuilder.tsx`) supports: search-to-add cards (click toggles in/out, singleton
 rule enforced by oracle_id except basic lands — see `deckLogic.ts`), per-card printing swap

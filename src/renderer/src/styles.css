@@ -168,6 +168,13 @@ body {
   gap: 10px;
 }
 
+/* 25% smaller than the base .card-grid (250px/25px) — used by "See cards in this deck" under
+   a Card Tags chip, where the list is usually short and doesn't need full-size tiles. */
+.card-grid--tag-filter {
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 19px;
+}
+
 .deck-card-slot {
   cursor: grab;
   border-radius: 10px;
@@ -400,6 +407,25 @@ body {
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
 }
 
+.card-tile__illegal-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  right: 6px;
+  background: rgba(240, 71, 71, 0.92);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  pointer-events: none;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card-tile__badge--want {
   background: #f04747;
 }
@@ -444,6 +470,77 @@ body {
   overflow-y: auto;
   padding: 24px;
   position: relative;
+}
+
+.export-deck-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 560px;
+  width: 100%;
+  max-height: 90vh;
+  padding: 24px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.export-deck-modal__textarea {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.export-deck-modal__textarea:focus {
+  outline: 2px solid var(--accent);
+}
+
+.import-deck-modal__summary {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.import-deck-modal__warning {
+  color: #f0824f;
+  font-size: 13px;
+  margin: 0;
+}
+
+.export-deck-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.confirm-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 420px;
+  width: 100%;
+  padding: 24px;
+}
+
+.confirm-modal__destructive {
+  background: #f04747;
+  border-color: #f04747;
+}
+
+.confirm-modal__destructive:hover {
+  filter: brightness(1.1);
 }
 
 .card-detail__close {
@@ -792,6 +889,34 @@ body {
   background: #919799;
   color: #111;
   border-color: #919799;
+}
+
+/* A word/phrase tag (e.g. a Core Mechanic name) needs a pill, not the circular single-letter
+   color-chip shape. */
+.filter-chip--text {
+  border-radius: 14px;
+  height: auto;
+  padding: 6px 12px;
+}
+
+.deck-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.deck-filter-bar .filter-group {
+  min-width: 160px;
+}
+
+.deck-filter-bar .filter-clear {
+  align-self: center;
 }
 
 .filter-select {
@@ -1153,18 +1278,25 @@ body {
 }
 
 .tag-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  /* Viewport-anchored (top/left set inline from the trigger chip's getBoundingClientRect()),
+     same pattern as .context-menu below — NOT position:absolute inside .tag-row. The absolute
+     version was still bound by every ancestor's stacking context (.tag-row, .basic-land-row,
+     .deck-builder__mid-section's forced z-index:1 layers, etc.) and no amount of z-index
+     tuning there won consistently; position:fixed escapes all of it in one move. */
+  position: fixed;
   z-index: 50;
   display: flex;
   flex-direction: column;
   min-width: 190px;
-  background: var(--panel);
+  /* Solid, not color-mix/backdrop-filter — backdrop-filter combined with this element's own
+     overflow:hidden was sampling the wrong compositing layer
+     in that setup, letting whatever was behind partially show through. A flat opaque color has
+     no such failure mode. */
+  background: #0e0e13;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
 .tag-menu button {
@@ -1179,6 +1311,24 @@ body {
 
 .tag-menu button:hover {
   background: var(--border);
+}
+
+.tag-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.tag-menu button:disabled:hover {
+  background: none;
+}
+
+.tag-chip.is-core-mechanic {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tag-chip__star {
+  margin-right: 3px;
+  color: #ffd76a;
 }
 
 .context-menu {
@@ -2042,6 +2192,50 @@ body {
 
 .card-tags__add-row input {
   flex: 1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.card-tags__add-row input:focus {
+  outline: 2px solid var(--accent);
+}
+
+/* Portaled to document.body (see CardTagsPanel), same reasoning as .tag-menu — position:fixed
+   inside this modal's own overflow-y:auto content would otherwise get clipped or lose stacking
+   fights the same way that one did. */
+.tag-name-dropdown {
+  position: fixed;
+  /* Higher than .card-detail-overlay's z-index:60 — this dropdown is portaled to document.body
+     alongside that overlay (same parent, body), so it needs to outrank the overlay itself, not
+     just the modal's own internal content, or the whole modal paints over it. */
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #0e0e13;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.tag-name-dropdown__item {
+  padding: 9px 14px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tag-name-dropdown__item:hover {
+  background: var(--border);
 }
 
 .edhrec-grid {
@@ -2190,8 +2384,9 @@ body {
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transition:
-    border-color 0.12s ease,
-    transform 0.12s ease;
+    border-color 0.1s ease,
+    opacity 0.1s ease,
+    transform 0.1s ease;
 }
 
 .deck-card:hover {
@@ -2291,23 +2486,40 @@ body {
   opacity: 0.5;
 }
 
-.deck-card__delete {
+.deck-card__menu-trigger {
   position: absolute;
-  top: 14px;
-  right: 18px;
+  top: 8px;
+  right: 12px;
   color: var(--muted);
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
   z-index: 1;
+  padding: 4px 9px;
+  border-radius: 6px;
 }
 
-.deck-card__delete:hover {
-  color: #f38a8a;
+.deck-card__menu-trigger:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.tag-menu button.tag-menu__destructive {
+  color: #f04747;
+}
+
+.tag-menu button.tag-menu__destructive:hover {
+  background: rgba(240, 71, 71, 0.15);
 }
 
 .deck-card.is-dragging {
   opacity: 0.4;
+  transform: scale(0.98);
+}
+
+.deck-card.is-drag-over {
+  border-color: var(--accent);
+  transform: scale(1.015);
 }
 
 .deck-card__drag-handle {
@@ -2625,6 +2837,87 @@ body {
   height: 16px;
 }
 
+.add-cards-search {
+  position: relative;
+  /* .deck-builder__mid-section-art-bg ~ * (below) forces every section in this view onto its
+     own z-index:1 stacking layer — including the card-results grid right after this one in the
+     DOM. Without a higher number here, that grid's layer paints over this one regardless of
+     the dropdown's own z-index, since that only wins comparisons *inside* this stacking
+     context, not against a whole sibling layer. */
+  z-index: 2;
+}
+
+.add-cards-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.add-cards-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.add-cards-dropdown__item:hover {
+  background: var(--border);
+}
+
+.add-cards-dropdown__item.is-in-deck {
+  color: var(--accent);
+}
+
+.add-cards-dropdown__item img {
+  width: 28px;
+  height: 39px;
+  object-fit: cover;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.add-cards-dropdown__no-art {
+  width: 28px;
+  height: 39px;
+  border-radius: 3px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.add-cards-dropdown__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-cards-dropdown__badge {
+  font-size: 11px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
 /* Deck name editing */
 
 .deck-builder__name {
@@ -2804,6 +3097,28 @@ body {
 
 .deck-card__stat--score {
   width: 56px;
+}
+
+.deck-card__stat--core-mechanics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  max-width: 150px;
+}
+
+.deck-card__core-mechanic-badge {
+  padding: 3px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .deck-card__score-ring {

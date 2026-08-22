@@ -7,7 +7,7 @@
 // gets tagged as (not for comments/refactors) — cardTagIndex.ts stamps every build with this,
 // so an index built under an older version is detected as stale and auto-rebuilt once, instead
 // of silently keeping wrong tags around until someone remembers to click "Rebuild Index".
-export const TAGGING_VERSION = 2
+export const TAGGING_VERSION = 7
 
 export interface CardTags {
   keywordTags: string[]
@@ -18,7 +18,9 @@ export interface TaggableCard {
   oracle_text?: string
   type_line: string
   keywords?: string[]
-  card_faces?: { oracle_text?: string; type_line?: string }[]
+  mana_cost?: string
+  cmc?: number
+  card_faces?: { oracle_text?: string; type_line?: string; mana_cost?: string }[]
 }
 
 function combinedOracleText(card: TaggableCard): string {
@@ -33,6 +35,16 @@ function combinedTypeLine(card: TaggableCard): string {
     return card.card_faces.map((f) => f.type_line ?? '').join(' // ')
   }
   return card.type_line
+}
+
+// A card's OWN cost, not just text describing other spells' costs — checked separately from
+// oracle text so a face with no rules text at all (vanilla X creatures are rare but exist)
+// still gets picked up.
+function combinedManaCost(card: TaggableCard): string {
+  if (card.card_faces && card.card_faces.length > 0) {
+    return card.card_faces.map((f) => f.mana_cost ?? '').join(' // ')
+  }
+  return card.mana_cost ?? ''
 }
 
 const PROTECTION_KEYWORDS = ['hexproof', 'shroud', 'indestructible', 'protection from']
@@ -53,13 +65,18 @@ const PUMP_KEYWORDS = [
 const DAMAGE_TO_ANY_OR_CREATURE = /deals? (\d+|x) damage to (any target|target creature)/i
 const DAMAGE_TO_PLAYER_ONLY = /deals? (\d+|x) damage to (target player|target opponent|each opponent|you|each player)/i
 
-function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
+function deriveFunctionalTags(text: string, typeLine: string, manaCost: string, cmc: number): Set<string> {
   const tags = new Set<string>()
   const isInstantOrSorcery = /\b(instant|sorcery)\b/i.test(typeLine)
   const isNonLandManaPermanent = /\b(artifact|creature|enchantment|planeswalker)\b/i.test(typeLine)
 
-  if (/draws? (a|an|\d+|two|three|four|five|six|seven|another|x) cards?/i.test(text)) tags.add('Card Draw')
-  if (/discards? (a|an|\d+|two|three|four|five|that many|all) cards?/i.test(text) || /discards? (their|your|his or her) hand/i.test(text)) {
+  if (/draws? (a|an|\d+|two|three|four|five|six|seven|another|x|\d*ˣ) cards?/i.test(text)) tags.add('Card Draw')
+  if (/put[\s\S]{0,20}of (them|those cards) into your hand/i.test(text)) tags.add('Card Draw')
+  if (
+    /discards? (a|an|\d+|two|three|four|five|that many|all) cards?/i.test(text) ||
+    /discards? this card\b/i.test(text) ||
+    /discards? (their|your|his or her) hand/i.test(text)
+  ) {
     tags.add('Discard')
   }
 
@@ -74,6 +91,7 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
     if (/\bland\b/i.test(typeLine)) tags.add('Fixing')
     else tags.add('Ramp')
   }
+  if (/reveal[\s\S]{0,150}land cards?[\s\S]{0,80}battlefield/i.test(text)) tags.add('Ramp')
 
   const addsMana = /add[s]? (\{[^}]+\}|one mana|two mana|three mana)/i.test(text) || /\{t\}[\s\S]{0,10}:[\s\S]{0,15}add/i.test(text)
   if (addsMana) {
@@ -102,9 +120,30 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
   } else if (hitsPlayerOnly) {
     tags.add('Burn')
   }
-  if (/(destroy|exile) target (creature|permanent|artifact|enchantment|planeswalker)/i.test(text)) tags.add('Removal')
+  const removalMatch = text.match(/(destroy|exile) (x |\d+ )?target (creatures?|permanents?|artifacts?|enchantments?|planeswalkers?)/i)
+  if (removalMatch) {
+    tags.add('Removal')
+    if (/^x /i.test(removalMatch[2] ?? '')) tags.add('Board Wipe')
+  }
   if (/target creature gets? -\d+\/-\d+/i.test(text)) tags.add('Soft Removal')
-  if (/return target creature to (its|their) owner'?s hand/i.test(text)) tags.add('Soft Removal')
+  const bounceMatch = text.match(
+    /return (x |\d+ )?target (creatures?|nonland permanents?|permanents?)[\s\S]{0,30}to (its|their) owner'?s hand/i
+  )
+  if (bounceMatch) {
+    tags.add('Soft Removal')
+    if (/^x /i.test(bounceMatch[1] ?? '')) tags.add('Board Wipe')
+  }
+  if (/return each creature[\s\S]{0,60}to (its|their) owner'?s hand/i.test(text)) {
+    tags.add('Soft Removal')
+    tags.add('Board Wipe')
+  }
+  const phaseOutMatch = text.match(/target creatures? phases? out/i)
+  if (phaseOutMatch) {
+    tags.add('Soft Removal')
+    tags.add('Protection')
+    const nearby = text.slice(Math.max(0, (phaseOutMatch.index ?? 0) - 20), phaseOutMatch.index)
+    if (/\b(x|up to)\b/i.test(nearby)) tags.add('Board Wipe')
+  }
   if (/destroy all creatures/i.test(text) || /each creature gets? -\d+\/-\d+/i.test(text) || /deals? (\d+|x) damage to each creature/i.test(text)) {
     tags.add('Board Wipe')
     tags.add('Removal')
@@ -123,7 +162,12 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
     tags.add('Counters')
   }
 
-  if (/creates? [\s\S]{0,40}tokens?/i.test(text)) tags.add('Token Creation')
+  const tokenMatch = text.match(/creates? [\s\S]{0,70}tokens?/i)
+  if (tokenMatch) {
+    tags.add('Token Creation')
+    if (/land creature tokens?/i.test(tokenMatch[0])) tags.add('Ramp')
+    if (/treasure tokens?/i.test(tokenMatch[0])) tags.add('Treasure')
+  }
 
   const lordMatch = text.match(/\b([A-Z][a-zA-Z]+) you control get \+\d+\/\+\d+/)
   if (lordMatch && lordMatch[1] !== 'Creatures' && lordMatch[1] !== 'Permanents') {
@@ -152,17 +196,26 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
     tags.add('Counterspell')
     tags.add('Protection')
   }
-  if (/gains? control of target/i.test(text)) tags.add('Steal')
+  const stealMatch = text.match(/gains? control of (x |\d+ )?target/i)
+  if (stealMatch) {
+    tags.add('Steal')
+    if (/^x /i.test(stealMatch[1] ?? '')) tags.add('Board Wipe')
+  }
 
   if (/return target creature card from[\s\S]{0,20}graveyard to the battlefield/i.test(text)) tags.add('Reanimation')
-  if (/return target [\s\S]{0,30}card from your graveyard to your hand/i.test(text)) tags.add('Recursion')
+  if (/return (x |\d+ )?target [\s\S]{0,30}cards? from your graveyard to your hand/i.test(text)) tags.add('Recursion')
+  if (/shuffle your graveyard into your library/i.test(text)) tags.add('Recursion')
   if (/mills? (a|an|\d+|x) cards?/i.test(text) || /puts? the top \d+ cards? of[\s\S]{0,30}library into[\s\S]{0,20}graveyard/i.test(text)) {
     tags.add('Mill')
   }
   if (/sacrifice (a|an|another)[\s\S]{0,10}(creature|permanent|artifact)/i.test(text)) tags.add('Sacrifice')
 
   const RESTRICTED_COPY_TYPES = /(creature|artifact|enchantment|planeswalker)/i
-  if (/cop(y|ies) target (spell|instant|sorcery)/i.test(text) || /creates? a token that'?s a copy of/i.test(text)) {
+  if (
+    /cop(y|ies) target (spell|instant|sorcery)/i.test(text) ||
+    /creates? (a token|tokens) that('?s| are) (a copy|copies) of/i.test(text) ||
+    /\bcopy (it|that spell|this spell|that ability)\b/i.test(text)
+  ) {
     tags.add('Copy')
   }
   const copyPermanentMatch = text.match(/cop(?:y|ies)[\s\S]{0,10}?(target|up to \w+) permanents?/i)
@@ -177,8 +230,17 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
     const nearby = text.slice(entersAsCopyMatch.index ?? 0, (entersAsCopyMatch.index ?? 0) + 80)
     if (/\bpermanent\b/i.test(nearby) && !RESTRICTED_COPY_TYPES.test(nearby)) tags.add('Ramp')
   }
+  const tokenCopyPermanentMatch = text.match(/tokens? that('?s| are) (a copy|copies) of (that|the|target) permanents?/i)
+  if (tokenCopyPermanentMatch) {
+    tags.add('Clone')
+    const nearby = text.slice(
+      Math.max(0, (tokenCopyPermanentMatch.index ?? 0) - 10),
+      (tokenCopyPermanentMatch.index ?? 0) + 60
+    )
+    if (!RESTRICTED_COPY_TYPES.test(nearby)) tags.add('Ramp')
+  }
 
-  const gainsLife = /you gain \d+ life/i.test(text) || /you gain life/i.test(text)
+  const gainsLife = /\bgains? [\s\S]{0,20}\blife\b/i.test(text)
   const opponentLosesLife = /(target player|target opponent|each opponent) loses \d+ life/i.test(text)
   if (gainsLife) tags.add('Life Gain')
   if (gainsLife && opponentLosesLife) tags.add('Drain')
@@ -195,6 +257,9 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
   if (/\b(when|whenever)\b[\s\S]{0,80}\benters\b/i.test(text)) tags.add('ETB')
   if (/whenever you cast/i.test(text)) tags.add('Cast')
   if (/whenever (you|a player|target player|each player)[\s\S]{0,20}draws? (a|an|\d+) cards?/i.test(text)) tags.add('Draw Matters')
+  if (/with \{x\}[\s\S]{0,10}in (its|their) mana cost/i.test(text)) tags.add('X Cost Matters')
+  if (/(mana cost|activation cost)[\s\S]{0,15}contains? \{x\}/i.test(text)) tags.add('X Cost Matters')
+  if (/\{x\}/i.test(manaCost)) tags.add('X Cost Matters')
   if (
     /whenever (a|another)[\s\S]{0,20}creature dies/i.test(text) ||
     /whenever[\s\S]{0,40}is destroyed/i.test(text) ||
@@ -207,15 +272,21 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
     /whenever you attack/i.test(text) ||
     /as long as[\s\S]{0,40}is attacking/i.test(text)
   ) {
-    tags.add('Aggression')
+    tags.add('Aggro')
   }
+  const AGGRO_KEYWORDS = ['haste', 'trample', 'first strike', 'double strike', 'menace']
+  if (AGGRO_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`, 'i').test(text))) tags.add('Aggro')
+  if (/attacks?[\s\S]{0,50}if able\b/i.test(text)) tags.add('Goad')
 
   if (/exile[\s\S]{0,120}(then return|return (it|that card|those cards|them)) to the battlefield/i.test(text)) tags.add('Blink')
   if (/prevent(s|ed)? (all|the next \d+|that)[\s\S]{0,60}damage/i.test(text)) tags.add('Fog')
   if (/exile the top card of your library[\s\S]{0,150}you may play (it|that card)/i.test(text)) tags.add('Impulse Draw')
+  if (/cast (this|that) spell as though it had flash/i.test(text)) tags.add('Flash')
+  if (/twice that many|double the value of|doubles? that many/i.test(text)) tags.add('Double')
 
   if (/\bequipment\b/i.test(typeLine)) tags.add('Equipment')
   if (/\baura\b/i.test(typeLine)) tags.add('Aura')
+  if (/\binstant\b/i.test(typeLine) && (cmc ?? Infinity) <= 2) tags.add('Spellslinger')
 
   return tags
 }
@@ -223,7 +294,7 @@ function deriveFunctionalTags(text: string, typeLine: string): Set<string> {
 export function deriveCardTags(card: TaggableCard): CardTags {
   const text = combinedOracleText(card)
   const typeLine = combinedTypeLine(card)
-  const functionalTags = [...deriveFunctionalTags(text, typeLine)].sort()
+  const functionalTags = [...deriveFunctionalTags(text, typeLine, combinedManaCost(card), card.cmc ?? Infinity)].sort()
   const keywordTags = [...(card.keywords ?? [])].sort()
   return { keywordTags, functionalTags }
 }

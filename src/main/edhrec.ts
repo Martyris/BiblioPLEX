@@ -241,6 +241,108 @@ export async function getCommanderTagIndex(cardName: string): Promise<CommanderT
   return result
 }
 
+export interface EdhrecPreconCatalogEntry {
+  // EDHREC's own URL slug for this specific precon's detail page (/precon/<slug>) — this is
+  // the stable identifier for a precon, since the same set can bundle several (e.g. Marvel
+  // Super Heroes Commander's four decks all share set code "msc").
+  slug: string
+  label: string
+  setCode: string
+  setHeader: string
+}
+
+/** The full historical catalog (2011-present) of Commander precons, grouped by set on
+ *  EDHREC's own precon index page — one entry per precon, not per set, since a set can bundle
+ *  several. Doesn't include per-card data; call getPreconDeckDetail(slug) for that. */
+export async function getPreconCatalog(): Promise<EdhrecPreconCatalogEntry[] | EdhrecError> {
+  const cacheKey = 'precon-catalog'
+  const cached = cache.get(cacheKey)
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.data as EdhrecPreconCatalogEntry[] | EdhrecError
+  }
+
+  try {
+    const parsed = await fetchNextData('https://edhrec.com/precon')
+    if (isEdhrecError(parsed)) return parsed
+
+    const lists = (
+      parsed as {
+        props?: { pageProps?: { data?: { container?: { json_dict?: { cardlists?: RawCardlist[] } } } } }
+      }
+    )?.props?.pageProps?.data?.container?.json_dict?.cardlists
+    if (!lists) return { error: true, status: 0, details: 'Unexpected EDHREC precon catalog shape' }
+
+    const entries: EdhrecPreconCatalogEntry[] = []
+    for (const list of lists) {
+      for (const view of list.cardviews ?? []) {
+        const raw = view as RawCardview & { url?: string; label?: string; set?: string }
+        if (!raw.url || !raw.label || !raw.set) continue
+        const slug = raw.url.replace(/^\/precon\//, '')
+        entries.push({ slug, label: raw.label, setCode: raw.set, setHeader: list.header })
+      }
+    }
+
+    cache.set(cacheKey, { data: entries, at: Date.now() })
+    return entries
+  } catch (err) {
+    return toEdhrecError(err)
+  }
+}
+
+// [name, quantity, set code, collector number] — EDHREC's own compact tuple shape for a
+// precon's decklist entries, already carrying the exact printing each precon actually ships.
+export type EdhrecPreconCardTuple = [string, number, string, string]
+
+export interface EdhrecPreconDeck {
+  commanderNames: string[]
+  commanderPrints: EdhrecPreconCardTuple[]
+  cardEntries: EdhrecPreconCardTuple[]
+}
+
+/** The exact decklist (every card's specific printing + quantity, commander included
+ *  separately) for one precon, from its own EDHREC detail page. */
+export async function getPreconDeckDetail(slug: string): Promise<EdhrecPreconDeck | EdhrecError> {
+  const cacheKey = `precon-detail:${slug}`
+  const cached = cache.get(cacheKey)
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.data as EdhrecPreconDeck | EdhrecError
+  }
+
+  try {
+    const parsed = await fetchNextData(`https://edhrec.com/precon/${encodeURIComponent(slug)}`)
+    if (isEdhrecError(parsed)) return parsed
+
+    const deck = (
+      parsed as {
+        props?: {
+          pageProps?: {
+            data?: {
+              deck?: {
+                commander?: string[]
+                commander_v2?: EdhrecPreconCardTuple[]
+                cards?: Record<string, EdhrecPreconCardTuple[]>
+              }
+            }
+          }
+        }
+      }
+    )?.props?.pageProps?.data?.deck
+    if (!deck) return { error: true, status: 0, details: 'Unexpected EDHREC precon detail shape' }
+
+    const cardEntries = Object.values(deck.cards ?? {}).flat()
+    const result: EdhrecPreconDeck = {
+      commanderNames: deck.commander ?? [],
+      commanderPrints: deck.commander_v2 ?? [],
+      cardEntries
+    }
+
+    cache.set(cacheKey, { data: result, at: Date.now() })
+    return result
+  } catch (err) {
+    return toEdhrecError(err)
+  }
+}
+
 export interface EdhrecTopCommander {
   id: string
   name: string

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import CardTile from './CardTile'
 import CardResults from './CardResults'
 import CardDetail from './CardDetail'
@@ -9,6 +10,8 @@ import DeckAnalyticsView from './DeckAnalyticsView'
 import DeckScoreView from './DeckScoreView'
 import DeckCombosView from './DeckCombosView'
 import { SORT_OPTIONS } from './SortControl'
+import { useCardResults } from '../useCardResults'
+import { useCardNameAutocomplete } from '../useCardNameAutocomplete'
 import { BASE_EXCLUSION_TERMS, EXCLUDE_TOKENS_TERM } from '../queryBuilder'
 import {
   addIdToList,
@@ -18,6 +21,7 @@ import {
   categorizeCard,
   countBasicLands,
   deriveTokens,
+  getIllegalReason,
   groupCardsByCategory,
   isBasicLand,
   swapPrinting,
@@ -121,6 +125,33 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const [view, setView] = useState<View>('deck')
   const [initialTag, setInitialTag] = useState<string | undefined>(undefined)
   const [searchQuery, setSearchQuery] = useState('')
+  const [addCardsDropdownOpen, setAddCardsDropdownOpen] = useState(false)
+  const addCardsInputRef = useRef<HTMLInputElement>(null)
+  const trimmedSearch = searchQuery.trim()
+  const searchQueryFull = trimmedSearch
+    ? [...BASE_EXCLUSION_TERMS, EXCLUDE_TOKENS_TERM, trimmedSearch].join(' ')
+    : ''
+  // Lifted out of CardResults so the "Add Cards" search box can drive both the results grid
+  // below and (for thumbnails only — see addCardByName) the typeahead dropdown off one
+  // Scryfall call instead of two — see CardResults' `results` prop.
+  const addCardsResults = useCardResults(searchQueryFull, SORT_OPTIONS[0], trimmedSearch)
+  // The dropdown's name list comes from this instead — an in-memory card-name catalog filtered
+  // locally with zero network round-trip, unlike addCardsResults above which fetches full card
+  // objects (images included) from Scryfall and needs a debounce to stay usable.
+  const addCardsAutocomplete = useCardNameAutocomplete(trimmedSearch)
+  const DROPDOWN_CARD_CAP = 4
+  const visibleAddCardsNames = addCardsAutocomplete.names.slice(0, DROPDOWN_CARD_CAP)
+  // Once there are few enough matches to all fit in the grid below AND their images have
+  // already loaded there, the dropdown is just a redundant, image-less copy of the same
+  // handful of results — hide it and let the (now equally fast) grid take over.
+  const addCardsFewMatchesLoaded =
+    addCardsAutocomplete.names.length > 0 &&
+    addCardsAutocomplete.names.length <= DROPDOWN_CARD_CAP &&
+    addCardsAutocomplete.names.every((name) =>
+      addCardsResults.cards.some((c) => c.name.toLowerCase() === name.toLowerCase())
+    )
+  const showAddCardsDropdown =
+    addCardsDropdownOpen && Boolean(trimmedSearch) && addCardsAutocomplete.names.length > 0 && !addCardsFewMatchesLoaded
   const [cardPoolQuery, setCardPoolQuery] = useState('')
   const [wantQuery, setWantQuery] = useState('')
   const [viewingCard, setViewingCard] = useState<ScryfallCard | null>(null)
@@ -166,8 +197,40 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const [cardTagOverrides, setCardTagOverrides] = useState<Map<string, CardTagOverride>>(new Map())
   const [activeSearchTags, setActiveSearchTags] = useState<string[]>([])
   const [showAllTags, setShowAllTags] = useState(false)
-  const [openTagMenu, setOpenTagMenu] = useState<string | null>(null)
+  // Carries the trigger chip's own screen position so the menu can be position:fixed
+  // (viewport-anchored, like CardContextMenu) instead of position:absolute nested inside
+  // .tag-row — the nested version kept losing stacking fights against later sibling sections
+  // (.basic-land-row etc.) no matter how the z-indexes were tuned, since it was still bound by
+  // every ancestor's own stacking context. Fixed positioning escapes all of that.
+  const [openTagMenu, setOpenTagMenu] = useState<{ tag: string; x: number; y: number } | null>(null)
+
+  // A fixed-position element tracks the viewport, not the scrollable panel it's opened from —
+  // so once that panel scrolls, the menu stays glued to its old screen coordinates while the
+  // chip that opened it moves away underneath. A capture-phase listener on document catches
+  // scroll events from any scrollable ancestor (scroll doesn't bubble, but capture still sees
+  // it), so this closes the menu the moment that happens rather than let it drift somewhere
+  // that no longer corresponds to the chip it belongs to.
+  useEffect(() => {
+    if (!openTagMenu) return
+    function handleScroll(): void {
+      setOpenTagMenu(null)
+    }
+    document.addEventListener('scroll', handleScroll, true)
+    return () => document.removeEventListener('scroll', handleScroll, true)
+  }, [openTagMenu])
+
   const [deckTagFilter, setDeckTagFilter] = useState<string | null>(null)
+  const [importModalOpen, setImportModalOpen] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<{
+    added: number
+    removed: string[]
+    outsideIdentity: string[]
+    banned: string[]
+    skippedCommander: string[]
+    notFound: string[]
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -434,8 +497,32 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
       const tags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
       for (const tag of tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
     }
-    return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count)
-  }, [deckCards, cardTagOverrides])
+    // Chosen Core Mechanics always lead the list — regardless of card count — so they never
+    // get pushed past the "Show More" cutoff by tags that just happen to have more cards.
+    const coreMechanics = new Set(storedDeck?.coreMechanicTags ?? [])
+    return [...counts.entries()]
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => {
+        const aCore = coreMechanics.has(a.tag)
+        const bCore = coreMechanics.has(b.tag)
+        if (aCore !== bCore) return aCore ? -1 : 1
+        return b.count - a.count
+      })
+  }, [deckCards, cardTagOverrides, storedDeck?.coreMechanicTags])
+
+  // Keeps a deck's stored Core Mechanics order in sync with their live count order (most-
+  // represented first) — the Decks list renders coreMechanicTags top to bottom exactly as
+  // stored, with no per-card tag data of its own to re-derive that order, so this is the one
+  // place it can ever get corrected. Runs for decks picked before this ordering existed (was
+  // append order) and keeps re-syncing afterward if card changes shift the relative counts.
+  useEffect(() => {
+    if (!storedDeck || storedDeck.coreMechanicTags.length < 2) return
+    const countByTag = new Map(deckCardTagCounts.map((t) => [t.tag, t.count]))
+    const sorted = [...storedDeck.coreMechanicTags].sort((a, b) => (countByTag.get(b) ?? 0) - (countByTag.get(a) ?? 0))
+    const alreadySorted = sorted.every((tag, i) => tag === storedDeck.coreMechanicTags[i])
+    if (!alreadySorted) persist({ coreMechanicTags: sorted })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedDeck?.id, deckCardTagCounts])
 
   const deckTagFilterCards = useMemo(() => {
     if (!deckTagFilter) return []
@@ -458,10 +545,35 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     wantIds?: string[]
     foilIds?: string[]
     lastScore?: StoredDeck['lastScore']
+    coreMechanicTags?: string[]
   }): Promise<void> {
     if (!storedDeck) return
     setStoredDeck({ ...storedDeck, ...patch })
     await window.api.updateDeck(storedDeck.id, patch)
+  }
+
+  const MAX_CORE_MECHANICS = 3
+
+  // Toggles a Card Tag in/out of this deck's up-to-3 "Core Mechanics" — the tags shown on its
+  // My Decks tile. Silently no-ops past the cap rather than bumping the oldest pick, so the
+  // menu option just reads "disabled" instead of surprising the user by evicting a choice.
+  function toggleCoreMechanic(tag: string): void {
+    if (!storedDeck) return
+    const current = storedDeck.coreMechanicTags
+    let next: string[]
+    if (current.includes(tag)) {
+      next = current.filter((t) => t !== tag)
+    } else if (current.length < MAX_CORE_MECHANICS) {
+      next = [...current, tag]
+    } else {
+      return
+    }
+    // Stored in the same order they'd appear in the Card Tags list (most-represented first) —
+    // the Decks list just renders this array top to bottom as-is, since it doesn't load full
+    // per-card tag data for every deck and so can't re-derive this order itself.
+    const countByTag = new Map(deckCardTagCounts.map((t) => [t.tag, t.count]))
+    next.sort((a, b) => (countByTag.get(b) ?? 0) - (countByTag.get(a) ?? 0))
+    persist({ coreMechanicTags: next })
   }
 
   function addWin(): void {
@@ -502,6 +614,176 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     } else {
       await persist({ cardIds: newIds })
     }
+  }
+
+  // Resolves an exact card name (from the fast autocomplete dropdown) to a full card object
+  // and adds/removes it — without waiting on addCardsResults' slower debounced full search.
+  // Prefers a card already sitting in addCardsResults if that debounce happened to catch up,
+  // to skip an extra Scryfall round-trip.
+  async function addCardByName(name: string): Promise<void> {
+    const cached = addCardsResults.cards.find((c) => c.name.toLowerCase() === name.toLowerCase())
+    if (cached) {
+      handleToggleCard(cached)
+      return
+    }
+    const exclusion = BASE_EXCLUSION_TERMS.join(' ')
+    const result = await window.api.searchCards(`!"${name}" ${exclusion}`, {
+      order: 'released',
+      dir: 'desc',
+      page: 1
+    })
+    if (isError(result)) return
+    const match = (result as ScryfallSearchResult).data?.[0]
+    if (match) handleToggleCard(match)
+  }
+
+  // "2 Sol Ring" / "2x Sol Ring" / a bare "Sol Ring" (implicit count 1) — matches the format
+  // the Decks list's own Export Deck produces, so a round-trip export→import just works.
+  function parseImportLines(text: string): { count: number; name: string }[] {
+    const entries: { count: number; name: string }[] = []
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const match = line.match(/^(\d+)\s*x?\s+(.+)$/i)
+      entries.push(match ? { count: Math.max(1, parseInt(match[1], 10)), name: match[2].trim() } : { count: 1, name: line })
+    }
+    return entries
+  }
+
+  // The imported list is treated as the deck's new target state, not an addition to it:
+  // - a non-basic already in the deck stays exactly as it is (its printing untouched);
+  // - a non-basic in the deck but NOT in the imported list is pulled out and moved to the
+  //   Card Pool (not deleted — you still own it, it just isn't in this build anymore);
+  // - a non-basic in the imported list but not currently in the deck is added, resolved in
+  //   one or two batched Scryfall calls (see getCardsByNames);
+  // - basics are re-synced by name+count from scratch (any basic name the import doesn't
+  //   mention is zeroed out), reusing whichever printing id the deck already had for that
+  //   name so an alt-art basic isn't silently swapped back to a default one.
+  // Cards matching this deck's own commander/partner are skipped — a common case when
+  // re-importing this deck's own export, which lists the commander as its own line.
+  async function handleImportDeck(): Promise<void> {
+    if (!storedDeck) return
+    const entries = parseImportLines(importText)
+    if (entries.length === 0) return
+
+    setImporting(true)
+    try {
+      const uniqueNames = [...new Set(entries.map((e) => e.name))]
+      const result = await window.api.getCardsByNames(uniqueNames)
+      if (isError(result)) {
+        window.alert(`Could not resolve cards: ${result.details}`)
+        return
+      }
+      const { data, not_found } = result as { data: ScryfallCard[]; not_found?: string[] }
+      const cardByLowerName = new Map(data.map((c) => [c.name.toLowerCase(), c]))
+      const commanderNamesLower = new Set(
+        [storedDeck.commanderName, storedDeck.partnerCommanderName]
+          .filter((n): n is string => Boolean(n))
+          .map((n) => n.toLowerCase())
+      )
+
+      const importedBasicCounts = new Map<string, number>()
+      const importedOracleIds = new Set<string>()
+      const importedNonBasicByOracleId = new Map<string, ScryfallCard>()
+
+      const outsideIdentity: string[] = []
+      const banned: string[] = []
+      const skippedCommander: string[] = []
+
+      for (const entry of entries) {
+        const card = cardByLowerName.get(entry.name.toLowerCase())
+        if (!card) continue
+
+        if (commanderNamesLower.has(card.name.toLowerCase())) {
+          if (!skippedCommander.includes(card.name)) skippedCommander.push(card.name)
+          continue
+        }
+
+        if (isBasicLand(card)) {
+          importedBasicCounts.set(card.name, (importedBasicCounts.get(card.name) ?? 0) + entry.count)
+        } else {
+          importedOracleIds.add(card.oracle_id)
+          if (!importedNonBasicByOracleId.has(card.oracle_id)) importedNonBasicByOracleId.set(card.oracle_id, card)
+        }
+
+        const reason = getIllegalReason(card, deckColorIdentity)
+        if (reason === 'banned' && !banned.includes(card.name)) banned.push(card.name)
+        else if (reason === 'color-identity' && !outsideIdentity.includes(card.name)) outsideIdentity.push(card.name)
+      }
+
+      const currentNonBasics = deckCards.filter((c) => !isBasicLand(c))
+      const keptNonBasics = currentNonBasics.filter((c) => importedOracleIds.has(c.oracle_id))
+      const removedNonBasics = currentNonBasics.filter((c) => !importedOracleIds.has(c.oracle_id))
+      const keptOracleIds = new Set(keptNonBasics.map((c) => c.oracle_id))
+      const addedNonBasics = [...importedNonBasicByOracleId.values()].filter((c) => !keptOracleIds.has(c.oracle_id))
+
+      const currentBasicIdsByName = new Map<string, string[]>()
+      for (const c of deckCards.filter(isBasicLand)) {
+        currentBasicIdsByName.set(c.name, [...(currentBasicIdsByName.get(c.name) ?? []), c.id])
+      }
+      const finalBasicIds: string[] = []
+      const newlyResolvedBasics: ScryfallCard[] = []
+      for (const [name, targetCount] of importedBasicCounts) {
+        const existingIds = currentBasicIdsByName.get(name) ?? []
+        let fallbackId = existingIds[0]
+        if (!fallbackId) {
+          // No copy of this basic already in the deck to reuse the printing from — pick one
+          // the same way the "+" stepper under Basic Lands does (commander's own set, else its
+          // sibling main set, else nearest release date), not whatever generic printing the
+          // bulk name lookup above happened to resolve to.
+          const themed = await findDefaultBasicPrinting(name)
+          const resolved = themed ?? cardByLowerName.get(name.toLowerCase()) ?? null
+          if (resolved) {
+            fallbackId = resolved.id
+            newlyResolvedBasics.push(resolved)
+          }
+        }
+        for (let i = 0; i < targetCount; i++) {
+          const id = existingIds[i] ?? fallbackId
+          if (id) finalBasicIds.push(id)
+        }
+      }
+
+      const nextCardIds = [...keptNonBasics.map((c) => c.id), ...addedNonBasics.map((c) => c.id), ...finalBasicIds]
+
+      // Removed non-basics move to the Card Pool rather than vanishing; newly added ones fold
+      // in too (and drop off Want) — both match how a normal single-card add already behaves.
+      const cardPoolIds = new Set(storedDeck.cardPoolIds)
+      for (const c of removedNonBasics) cardPoolIds.add(c.id)
+      for (const c of addedNonBasics) cardPoolIds.add(c.id)
+      const addedIds = new Set(addedNonBasics.map((c) => c.id))
+      const wantIds = storedDeck.wantIds.filter((id) => !addedIds.has(id))
+
+      // deckCards resolves every id in cardIds through this map and drops anything missing —
+      // the newly-picked basic land printings (finalBasicIds) need to be cached here too, or
+      // they're written into cardIds correctly but silently fail to render until the deck is
+      // reopened and cardsById gets rebuilt from scratch via a full getCardsByIds fetch.
+      setCardsById((prev) => {
+        const next = { ...prev }
+        for (const c of cardByLowerName.values()) next[c.id] = c
+        for (const c of newlyResolvedBasics) next[c.id] = c
+        return next
+      })
+
+      await persist({ cardIds: nextCardIds, cardPoolIds: [...cardPoolIds], wantIds })
+
+      setImportResult({
+        added: addedNonBasics.length,
+        removed: removedNonBasics.map((c) => c.name),
+        outsideIdentity,
+        banned,
+        skippedCommander,
+        notFound: not_found ?? []
+      })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  function closeImportModal(): void {
+    setImportModalOpen(false)
+    setImportText('')
+    setImportResult(null)
   }
 
   async function toggleCardPool(card: ScryfallCard): Promise<void> {
@@ -631,18 +913,43 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   // First copy of a given basic land name in this deck: prefer a printing from the
   // commander's own set (matches the deck's "flavor"), falling back to whichever printing
   // released closest to the commander's release date if that set never printed this basic.
+  async function findBasicInSet(name: string, setCode: string, exclusion: string): Promise<ScryfallCard | null> {
+    const result = await window.api.searchCards(`!"${name}" set:${setCode} ${exclusion}`, {
+      order: 'released',
+      dir: 'desc'
+    })
+    if (isError(result)) return null
+    return (result as ScryfallSearchResult).data?.[0] ?? null
+  }
+
   async function findDefaultBasicPrinting(name: string): Promise<ScryfallCard | null> {
     const exclusion = BASE_EXCLUSION_TERMS.join(' ')
     if (commander?.set) {
-      const setResult = await window.api.searchCards(`!"${name}" set:${commander.set} ${exclusion}`, {
-        order: 'released',
-        dir: 'desc'
-      })
-      if (!isError(setResult)) {
-        const setMatch = (setResult as ScryfallSearchResult).data?.[0]
-        if (setMatch) return setMatch
+      const setMatch = await findBasicInSet(name, commander.set, exclusion)
+      if (setMatch) return setMatch
+    }
+
+    // Commander precon sets (e.g. "Secrets of Strixhaven Commander") routinely print zero
+    // basic lands of their own — they're meant to draw on the accompanying main set (e.g.
+    // "Secrets of Strixhaven", released the same day). Try that sibling set by name before
+    // falling back to "closest release date across all of Magic", which can land on a
+    // same-day but completely unrelated product (a Universes Beyond crossover, say) purely
+    // by date coincidence — which is what happened before this fix.
+    if (commander?.set_name) {
+      const siblingName = commander.set_name.replace(/\s+Commander$/i, '').trim()
+      if (siblingName.toLowerCase() !== commander.set_name.toLowerCase()) {
+        const setsResult = await window.api.getSets()
+        if (!isError(setsResult)) {
+          const sets = (setsResult as { data: { code: string; name: string }[] }).data ?? []
+          const sibling = sets.find((s) => s.name.toLowerCase() === siblingName.toLowerCase())
+          if (sibling) {
+            const siblingMatch = await findBasicInSet(name, sibling.code, exclusion)
+            if (siblingMatch) return siblingMatch
+          }
+        }
       }
     }
+
     const allResult = await window.api.searchCards(`!"${name}" ${exclusion}`, {
       order: 'released',
       dir: 'desc'
@@ -890,11 +1197,6 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     )
   }
 
-  const trimmedSearch = searchQuery.trim()
-  const searchQueryFull = trimmedSearch
-    ? [...BASE_EXCLUSION_TERMS, EXCLUDE_TOKENS_TERM, trimmedSearch].join(' ')
-    : ''
-
   return (
     <div className="app__results">
       <div className="app__results-toolbar">
@@ -1058,6 +1360,13 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
 
         <div className="deck-builder__header-block">
+          <h3 className="section-heading">Import</h3>
+          <button className="secondary-button" onClick={() => setImportModalOpen(true)}>
+            Import Deck
+          </button>
+        </div>
+
+        <div className="deck-builder__header-block">
           <h3 className="section-heading">Match Record</h3>
           <div className="record-row">
             <div className="record-control">
@@ -1152,43 +1461,65 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           // Most-used tags read as vivid/accent-colored; less-represented tags fade toward
           // the neutral chip look, so the eye lands on the deck's dominant themes first.
           const pct = Math.round(15 + (count / maxCount) * 85)
+          const isCoreMechanic = storedDeck.coreMechanicTags.includes(tag)
+          const coreMechanicCapped = !isCoreMechanic && storedDeck.coreMechanicTags.length >= MAX_CORE_MECHANICS
           return (
             <div key={tag} className="tag-menu-wrapper">
               <button
-                className="tag-chip"
+                className={`tag-chip ${isCoreMechanic ? 'is-core-mechanic' : ''}`}
                 style={{
                   background: `color-mix(in srgb, var(--accent) ${pct}%, var(--panel))`,
                   borderColor: `color-mix(in srgb, var(--accent) ${pct}%, var(--border))`,
                   color: pct >= 60 ? '#fff' : 'var(--muted)'
                 }}
-                onClick={() => setOpenTagMenu(openTagMenu === tag ? null : tag)}
-                title={`${count} card(s) in this deck`}
+                onClick={(e) => {
+                  if (openTagMenu?.tag === tag) {
+                    setOpenTagMenu(null)
+                    return
+                  }
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setOpenTagMenu({ tag, x: rect.left, y: rect.bottom + 4 })
+                }}
+                title={`${count} card(s) in this deck${isCoreMechanic ? ' — Core Mechanic' : ''}`}
               >
+                {isCoreMechanic && <span className="tag-chip__star">★</span>}
                 {tag} <span className="tag-chip__weight">{count}</span>
               </button>
-              {openTagMenu === tag && (
-                <>
-                  <div className="tag-menu-backdrop" onClick={() => setOpenTagMenu(null)} />
-                  <div className="tag-menu">
-                    <button
-                      onClick={() => {
-                        setOpenTagMenu(null)
-                        openTagSearch(tag)
-                      }}
-                    >
-                      Search more cards
-                    </button>
-                    <button
-                      onClick={() => {
-                        setOpenTagMenu(null)
-                        setDeckTagFilter(tag)
-                      }}
-                    >
-                      See cards in this deck
-                    </button>
-                  </div>
-                </>
-              )}
+              {openTagMenu?.tag === tag &&
+                createPortal(
+                  <>
+                    <div className="tag-menu-backdrop" onClick={() => setOpenTagMenu(null)} />
+                    <div className="tag-menu" style={{ top: openTagMenu.y, left: openTagMenu.x }}>
+                      <button
+                        onClick={() => {
+                          setOpenTagMenu(null)
+                          openTagSearch(tag)
+                        }}
+                      >
+                        Search more cards
+                      </button>
+                      <button
+                        onClick={() => {
+                          setOpenTagMenu(null)
+                          setDeckTagFilter(tag)
+                        }}
+                      >
+                        See cards in this deck
+                      </button>
+                      <button
+                        disabled={coreMechanicCapped}
+                        title={coreMechanicCapped ? `You can only pick ${MAX_CORE_MECHANICS} core mechanics` : undefined}
+                        onClick={() => {
+                          setOpenTagMenu(null)
+                          toggleCoreMechanic(tag)
+                        }}
+                      >
+                        {isCoreMechanic ? 'Remove Core Mechanic' : 'Mark as Core Mechanic'}
+                      </button>
+                    </div>
+                  </>,
+                  document.body
+                )}
             </div>
           )
         })}
@@ -1207,7 +1538,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               ×
             </button>
           </div>
-          <div className="card-grid">
+          <div className="card-grid card-grid--tag-filter">
             {deckTagFilterCards.map((card) => (
               <CardTile
                 key={card.id}
@@ -1253,22 +1584,78 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
       </div>
 
       <h3 className="section-heading">Add Cards</h3>
-      <input
-        className="app__search"
-        type="text"
-        placeholder="Search cards to add — click a result to add or remove it…"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-      />
+      <div className="add-cards-search">
+        <input
+          ref={addCardsInputRef}
+          className="app__search"
+          type="text"
+          placeholder="Search cards to add — press Enter on a single match, or click a result…"
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value)
+            setAddCardsDropdownOpen(true)
+          }}
+          onFocus={() => setAddCardsDropdownOpen(true)}
+          onBlur={() => {
+            // Delay so a click on a dropdown row registers before the row unmounts.
+            window.setTimeout(() => setAddCardsDropdownOpen(false), 150)
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return
+            if (addCardsAutocomplete.names.length !== 1) return
+            const onlyName = addCardsAutocomplete.names[0]
+            addCardByName(onlyName)
+            // Leaves the typed text in place but selected, so the next keystroke overwrites it
+            // and the user can go straight on to the next card without touching the mouse.
+            addCardsInputRef.current?.select()
+          }}
+        />
+        {showAddCardsDropdown && (
+          <div className="add-cards-dropdown">
+            {visibleAddCardsNames.map((name) => {
+              // The names list resolves instantly from the local catalog; the matching full
+              // card object (for its thumbnail) comes from the slower full search and may not
+              // have arrived yet — show a placeholder swatch until it does rather than
+              // waiting on it.
+              const card = addCardsResults.cards.find((c) => c.name.toLowerCase() === name.toLowerCase())
+              const thumb = card?.image_uris?.small ?? card?.card_faces?.[0]?.image_uris?.small
+              const inDeck = card ? deckOracleIds.has(card.oracle_id) : false
+              return (
+                <button
+                  key={name}
+                  className={`add-cards-dropdown__item ${inDeck ? 'is-in-deck' : ''}`}
+                  // onMouseDown (not onClick) fires before the input's onBlur closes the dropdown.
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    addCardByName(name)
+                    addCardsInputRef.current?.focus()
+                    addCardsInputRef.current?.select()
+                  }}
+                >
+                  {thumb ? <img src={thumb} alt="" /> : <span className="add-cards-dropdown__no-art" />}
+                  <span className="add-cards-dropdown__name">{name}</span>
+                  {inDeck && <span className="add-cards-dropdown__badge">✓ In Deck</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
       {trimmedSearch && (
         <CardResults
           query={searchQueryFull}
           sort={SORT_OPTIONS[0]}
           emptyHint="No cards found."
-          onSelect={handleToggleCard}
+          onSelect={(card) => {
+            handleToggleCard(card)
+            // Same "ready for the next card" behavior as the dropdown/Enter path below.
+            addCardsInputRef.current?.focus()
+            addCardsInputRef.current?.select()
+          }}
           isInDeck={(card) => deckOracleIds.has(card.oracle_id)}
           getMarker={getMarker}
           rawText={trimmedSearch}
+          results={addCardsResults}
         />
       )}
       </div>
@@ -1367,6 +1754,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                                 setViewingCard(c)
                               }}
                               isFoil={foilIdSet.has(foilKeyFor(card.id, occurrence))}
+                              illegalReason={getIllegalReason(card, deckColorIdentity)}
                             />
                           </div>
                         )
@@ -1743,6 +2131,68 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             }
           }}
         />
+      )}
+
+      {importModalOpen && (
+        <div className="card-detail-overlay" onClick={closeImportModal}>
+          <div className="export-deck-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="card-detail__close" onClick={closeImportModal}>
+              ×
+            </button>
+            <h3 className="section-heading" style={{ marginTop: 0 }}>
+              Import Deck
+            </h3>
+            <p className="app__hint">
+              Paste a simplified decklist ("count name" per line — the same format Export Deck produces). This
+              becomes the deck's new list — cards already here that aren't in it move to the Card Pool instead of
+              being deleted; everything else is added.
+            </p>
+            <textarea
+              className="export-deck-modal__textarea"
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder={'1 Sol Ring\n1 Command Tower\n9 Island\n…'}
+              spellCheck={false}
+            />
+            {importResult && (
+              <div className="import-deck-modal__summary">
+                <p className="app__hint">
+                  Added {importResult.added} card(s)
+                  {importResult.removed.length > 0 && `, moved ${importResult.removed.length} to the Card Pool`}.
+                </p>
+                {importResult.removed.length > 0 && (
+                  <p className="app__hint">Moved to Card Pool (not in the imported list): {importResult.removed.join(', ')}</p>
+                )}
+                {importResult.outsideIdentity.length > 0 && (
+                  <p className="import-deck-modal__warning">
+                    ⚠ Outside color identity: {importResult.outsideIdentity.join(', ')}
+                  </p>
+                )}
+                {importResult.banned.length > 0 && (
+                  <p className="import-deck-modal__warning">
+                    ⚠ Banned in Commander: {importResult.banned.join(', ')}
+                  </p>
+                )}
+                {importResult.skippedCommander.length > 0 && (
+                  <p className="app__hint">
+                    This deck's own commander (skipped): {importResult.skippedCommander.join(', ')}
+                  </p>
+                )}
+                {importResult.notFound.length > 0 && (
+                  <p className="import-deck-modal__warning">Could not find: {importResult.notFound.join(', ')}</p>
+                )}
+              </div>
+            )}
+            <div className="export-deck-modal__actions">
+              <button className="secondary-button" onClick={closeImportModal}>
+                Close
+              </button>
+              <button className="primary-button" onClick={handleImportDeck} disabled={importing || !importText.trim()}>
+                {importing ? 'Importing…' : 'Confirm Import'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {poolWantContextMenu && (
