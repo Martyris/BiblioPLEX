@@ -23,6 +23,22 @@ export interface DeckTag {
 // 3 Upgraded, 4 Optimized, 5 cEDH. Set manually by the player, not derived.
 export type Bracket = 1 | 2 | 3 | 4 | 5
 
+// A "Logic file" encodes deck-specific strategic guidance for the Playtest bot AI — authored
+// externally (deck owner + their own Claude access + docs/logic-file-guide.md), pasted into
+// Deck Builder's Import Logic modal, and read-only from the app's side. v1 supports exactly one
+// rule type, matching the one real hook BiblioComputerPlayer7.java has for this
+// (holdInstantsWhileNotAttacking) — see that file and docs/logic-file-guide.md.
+export interface LogicRule {
+  type: 'holdInstantUntilAttackTrigger'
+  permanentNames: string[]
+  note?: string
+}
+
+export interface DeckLogicFile {
+  version: number
+  rules: LogicRule[]
+}
+
 export interface StoredDeck {
   id: string
   name: string
@@ -46,10 +62,18 @@ export interface StoredDeck {
   cardPoolIds: string[]
   wantIds: string[]
   foilIds: string[]
+  // Cards the player has flagged as "on the chopping block" while still deciding — a review
+  // aid, not a removal itself, so cutting a card stays a deliberate separate action.
+  consideringIds: string[]
   lastScore: { overall: number; grade: string; recordedAt: string } | null
-  // Up to 3 tags (from the auto-detected Card Tags list) the player has singled out as this
-  // deck's defining mechanics — shown on the "My Decks" tile. Capped at 3 in the UI, not here.
-  coreMechanicTags: string[]
+  // The deck's chosen archetype (renderer's deckScore.ts ARCHETYPE_OPTIONS, plus 'auto'/'none')
+  // — set from the picker on the main editor screen, feeds the Score tab's targets, and shows
+  // on the "My Decks" tile in place of the old manually-picked Core Mechanic tags.
+  archetypeKey: string
+  logicFile: DeckLogicFile | null
+  // Tags a user has added to a specific card WITHIN this deck only — see the renderer's
+  // types.ts for the full reasoning (purely additive; no per-deck "removed" list).
+  userCardTags: Record<string, string[]>
 }
 
 let cache: StoredDeck[] | null = null
@@ -105,8 +129,11 @@ async function load(): Promise<StoredDeck[]> {
       cardPoolIds: d.cardPoolIds ?? [],
       wantIds: d.wantIds ?? [],
       foilIds: d.foilIds ?? [],
+      consideringIds: d.consideringIds ?? [],
       lastScore: d.lastScore ?? null,
-      coreMechanicTags: d.coreMechanicTags ?? []
+      archetypeKey: d.archetypeKey ?? 'auto',
+      logicFile: d.logicFile ?? null,
+      userCardTags: d.userCardTags ?? {}
     }))
   } catch {
     cache = []
@@ -158,8 +185,11 @@ export async function createDeck(
     cardPoolIds: [],
     wantIds: [],
     foilIds: [],
+    consideringIds: [],
     lastScore: null,
-    coreMechanicTags: []
+    archetypeKey: 'auto',
+    logicFile: null,
+    userCardTags: {}
   }
   await persist([...decks, deck])
   return deck
@@ -180,8 +210,11 @@ export interface DeckPatch {
   cardPoolIds?: string[]
   wantIds?: string[]
   foilIds?: string[]
+  consideringIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
-  coreMechanicTags?: string[]
+  archetypeKey?: string
+  logicFile?: DeckLogicFile | null
+  userCardTags?: Record<string, string[]>
 }
 
 export async function updateDeck(id: string, patch: DeckPatch): Promise<StoredDeck | null> {
@@ -233,16 +266,19 @@ export async function createDeckFromPrecon(precon: {
     cardPoolIds: [],
     wantIds: [],
     foilIds: [],
+    consideringIds: [],
     lastScore: null,
-    coreMechanicTags: []
+    archetypeKey: 'auto',
+    logicFile: null,
+    userCardTags: {}
   }
   await persist([...decks, deck])
   return deck
 }
 
-/** Copies a deck's full build (cardIds, tags, bracket, pool/want/foil lists, core mechanics,
- *  etc.) under a new id, appended to the end of the list. Match record and score are reset —
- *  those describe the ORIGINAL deck's play history, not something a fresh copy inherits. */
+/** Copies a deck's full build (cardIds, tags, bracket, pool/want/foil/considering lists,
+ *  archetype, etc.) under a new id, appended to the end of the list. Match record and score are
+ *  reset — those describe the ORIGINAL deck's play history, not something a fresh copy inherits. */
 export async function duplicateDeck(id: string): Promise<StoredDeck | null> {
   const decks = await load()
   const original = decks.find((d) => d.id === id)
@@ -260,7 +296,8 @@ export async function duplicateDeck(id: string): Promise<StoredDeck | null> {
     cardPoolIds: [...original.cardPoolIds],
     wantIds: [...original.wantIds],
     foilIds: [...original.foilIds],
-    coreMechanicTags: [...original.coreMechanicTags],
+    consideringIds: [...original.consideringIds],
+    userCardTags: { ...original.userCardTags },
     order: maxOrder + 1,
     createdAt: now,
     updatedAt: now,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import CardTile from './CardTile'
 import CardContextMenu from './CardContextMenu'
 import FilterPanel from './FilterPanel'
@@ -6,6 +6,7 @@ import TagAutocomplete from './TagAutocomplete'
 import SortControl, { SORT_OPTIONS, type SortOption } from './SortControl'
 import { cardMatchesFilters, EMPTY_FILTERS, type FilterState } from '../queryBuilder'
 import type { ScryfallCard } from '../types'
+import { getIndexBuildSnapshot, startCardTagBuild, startComboBuild, subscribeToIndexBuilds } from '../indexBuildStore'
 
 interface Props {
   initialTags: string[]
@@ -28,6 +29,14 @@ type IndexedCard = ScryfallCard & { tags: string[] }
 interface IndexStatus {
   builtAt: string | null
   count: number
+  stale?: boolean
+}
+
+interface ComboIndexStatus {
+  builtAt: string | null
+  variantCount: number
+  comboCardCount: number
+  stale: boolean
 }
 
 const DEFAULT_SORT = SORT_OPTIONS.find((o) => o.order === 'edhrec') ?? SORT_OPTIONS[0]
@@ -85,16 +94,41 @@ export default function TagSearchView({
   const [results, setResults] = useState<IndexedCard[]>([])
   const [searching, setSearching] = useState(false)
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null)
-  const [building, setBuilding] = useState(false)
-  const [buildError, setBuildError] = useState<string | null>(null)
+  const [comboStatus, setComboStatus] = useState<ComboIndexStatus | null>(null)
   const [contextMenu, setContextMenu] = useState<{ card: ScryfallCard; x: number; y: number } | null>(null)
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT)
   const [availableTags, setAvailableTags] = useState<string[]>([])
 
+  // Both builds run through a shared module-level store (see indexBuildStore.ts) rather than
+  // local state — the persistent bottom progress bar (App.tsx) needs to see and cancel the same
+  // in-flight build even after this view unmounts, since the underlying IPC call keeps running
+  // in the main process regardless of what's mounted here.
+  const buildState = useSyncExternalStore(subscribeToIndexBuilds, getIndexBuildSnapshot)
+  const building = buildState.cardTag.building
+  const buildError = buildState.cardTag.error
+  const comboBuilding = buildState.combo.building
+  const comboBuildProgress = buildState.combo.progress
+  const comboBuildError = buildState.combo.error
+
   useEffect(() => {
     window.api.getCardTagIndexStatus().then(setIndexStatus)
+    window.api.getComboIndexStatus().then(setComboStatus)
   }, [])
+
+  // Refetch the on-disk status once a build (started from here or resumed from elsewhere)
+  // finishes, so "Rebuild Index" / the built-at timestamp reflect the new file.
+  const wasCardTagBuilding = useRef(building)
+  useEffect(() => {
+    if (wasCardTagBuilding.current && !building) window.api.getCardTagIndexStatus().then(setIndexStatus)
+    wasCardTagBuilding.current = building
+  }, [building])
+
+  const wasComboBuilding = useRef(comboBuilding)
+  useEffect(() => {
+    if (wasComboBuilding.current && !comboBuilding) window.api.getComboIndexStatus().then(setComboStatus)
+    wasComboBuilding.current = comboBuilding
+  }, [comboBuilding])
 
   // Refetch whenever the index is (re)built, since a rebuild can add/remove tag values.
   useEffect(() => {
@@ -152,27 +186,13 @@ export default function TagSearchView({
     setContextMenu(null)
   }
 
-  async function handleBuildIndex(): Promise<void> {
-    setBuilding(true)
-    setBuildError(null)
-    try {
-      const status = await window.api.buildCardTagIndex()
-      setIndexStatus(status)
-    } catch (err) {
-      console.error('[tag index] build failed:', err)
-      setBuildError('Failed to build the index — check your connection and try again.')
-    } finally {
-      setBuilding(false)
-    }
-  }
-
   return (
     <div className="app__results">
       <div className="app__results-toolbar">
-        <button className="back-link" onClick={onBack}>
+        <button className="back-link back-link--nav" onClick={onBack}>
           ← Back to deck
         </button>
-        <h2 className="set-detail__title">Search by Tag</h2>
+        <h2 className="set-detail__title tag-search__title">Search by Tag</h2>
         <SortControl value={sort} onChange={setSort} />
       </div>
 
@@ -184,7 +204,7 @@ export default function TagSearchView({
         ) : (
           <p className="app__hint">No card tag index yet — build one to search by tag.</p>
         )}
-        <button className="back-link" onClick={handleBuildIndex} disabled={building}>
+        <button className="secondary-button" onClick={startCardTagBuild} disabled={building}>
           {building ? 'Building…' : indexStatus?.builtAt ? 'Rebuild Index' : 'Build Card Tag Index'}
         </button>
       </div>
@@ -193,6 +213,38 @@ export default function TagSearchView({
         <p className="app__hint">
           This downloads and processes Scryfall's card database once — it can take a few minutes — and stays
           available until you rebuild it later for newer sets.
+        </p>
+      )}
+
+      <div className="app__results-toolbar tag-search__index-row">
+        {comboStatus?.builtAt ? (
+          <p className="app__hint">
+            Combo index built {new Date(comboStatus.builtAt).toLocaleString()} ·{' '}
+            {comboStatus.comboCardCount.toLocaleString()} combo-heavy cards (from{' '}
+            {comboStatus.variantCount.toLocaleString()} combos)
+            {comboStatus.stale ? ' · out of date — the card tag index needs a rebuild after this' : ''}
+          </p>
+        ) : (
+          <p className="app__hint">No combo index yet — build one to enable the "Combo" tag.</p>
+        )}
+        <button className="secondary-button" onClick={startComboBuild} disabled={comboBuilding}>
+          {comboBuilding ? 'Crawling…' : comboStatus?.builtAt ? 'Rebuild Combo Index' : 'Build Combo Index'}
+        </button>
+      </div>
+      {comboBuilding && (
+        <p className="app__hint">
+          {comboBuildProgress.phase === 'rate-limited'
+            ? `Commander Spellbook is rate-limiting us — waiting a few minutes before resuming (${comboBuildProgress.current} pages so far)…`
+            : `Crawling Commander Spellbook… (${comboBuildProgress.current} pages so far)`}
+        </p>
+      )}
+      {comboBuildError && <p className="app__error">{comboBuildError}</p>}
+      {!comboStatus?.builtAt && !comboBuilding && (
+        <p className="app__hint">
+          Pulls every combo Commander Spellbook knows about and tallies which cards show up in a lot of them — this
+          is what powers the "Combo" tag. There's no bulk export for this, so it's paced deliberately slowly to
+          avoid Commander Spellbook's rate limit — expect 30-60+ minutes. Leave the app open and rebuild the card
+          tag index afterward to actually apply "Combo" to search results.
         </p>
       )}
 

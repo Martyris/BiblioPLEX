@@ -1,13 +1,40 @@
 import type { ScryfallCard } from './types'
+import { isBasicLand } from './deckLogic'
 
 export interface CardTags {
   keywordTags: string[]
   functionalTags: string[]
 }
 
+// Oracle ids that show up in a lot of Commander Spellbook combos (see src/main/comboIndex.ts),
+// loaded once at app startup via setComboHeavyOracleIds — populated from an IPC call rather
+// than derived locally, since "a lot of combos" can't come from this card's own oracle text the
+// way every other functional tag here does. Empty (no "Combo" tags shown) until that load
+// resolves or if the combo index has never been built.
+let comboHeavyOracleIds = new Set<string>()
+
+export function setComboHeavyOracleIds(ids: string[]): void {
+  comboHeavyOracleIds = new Set(ids)
+}
+
 export interface CardTagOverride {
   added: string[]
   removed: string[]
+}
+
+export interface TaggerTagRef {
+  slug: string
+  label: string
+}
+
+/** Scryfall Tagger data for one card (see src/main/tagIndex.ts) — `specific` is every granular
+ *  tag Tagger actually applied, `rollup` is those collapsed up to their umbrella category
+ *  (Removal, Ramp, Board Wipe, ...) via the tag taxonomy's own ancestry. Passed in from
+ *  DeckBuilder's batch fetch rather than looked up per-card here, same reasoning as
+ *  CardTagOverride below. */
+export interface TaggerCardData {
+  specific: TaggerTagRef[]
+  rollup: TaggerTagRef[]
 }
 
 interface TaggableCard {
@@ -386,6 +413,7 @@ export const KNOWN_FUNCTIONAL_TAGS: string[] = [
   'Card Draw',
   'Cast',
   'Clone',
+  'Combo',
   'Copy',
   'Cost Reduction',
   'Counters',
@@ -432,17 +460,106 @@ export const KNOWN_FUNCTIONAL_TAGS: string[] = [
 export function deriveCardTags(card: ScryfallCard): CardTags {
   const text = combinedOracleText(card)
   const typeLine = combinedTypeLine(card)
-  const functionalTags = [...deriveFunctionalTags(text, typeLine, combinedManaCost(card), card.cmc)].sort()
+  const tags = deriveFunctionalTags(text, typeLine, combinedManaCost(card), card.cmc)
+  if (comboHeavyOracleIds.has(card.oracle_id)) tags.add('Combo')
+  const functionalTags = [...tags].sort()
   const keywordTags = [...(card.keywords ?? [])].sort()
   return { keywordTags, functionalTags }
 }
 
-/** Merges the auto-derived tags with a manual override (added/removed deltas), producing
- *  the final tag list shown/searched anywhere in the app. */
-export function resolveCardTags(card: ScryfallCard, override?: CardTagOverride): string[] {
-  const auto = deriveCardTags(card)
-  const resolved = new Set([...auto.keywordTags, ...auto.functionalTags])
+/** Merges Scryfall Tagger's data (when available — see TaggerCardData) or the regex fallback,
+ *  a global manual override, and this deck's own per-card additions into the umbrella-level
+ *  tag list used for filtering, scoring, and analytics — e.g. "removal-destroy" and
+ *  "spot-removal" both collapse to one "Removal" here instead of each counting separately
+ *  (that's exactly what taggerData.rollup already is; the regex fallback's own tags don't need
+ *  this distinction, they're already umbrella-level by construction). `taggerData` and
+ *  `userAdded` are both optional and default to "not available" so every existing call site
+ *  that only ever passed `override` keeps working unchanged.
+ *
+ *  Use resolveDetailedCardTags instead for the full specific+rollup list a card inspect view
+ *  wants to show. */
+// Every clause of an activated ability's effect (split on ".") has to look like nothing but
+// producing mana for the ability itself to count as "mana-only" — covers the plain "Add {C}."
+// case as well as a "Choose a color. Add one mana of that color." two-clause version, but a
+// clause like Alchemist's Refuge's "players may cast spells from the top of their libraries"
+// fails immediately and correctly marks the whole ability (and so the card) as non-mana-only.
+const MANA_CLAUSE = /^(add\b|choose a color\b|you may reveal\b|spend this mana\b)/i
+
+/** Tagger's "Activated Ability" is its single largest, and least useful, tag for a deckbuilder —
+ *  virtually every land has SOME kind of tap ability. Suppressed specifically for a land whose
+ *  activated ability(ies) are ALL pure mana abilities (Exotic Orchard), while a land with even
+ *  one SEPARATE ability that does something else (Alchemist's Refuge's second ability lets
+ *  players cast from the top of their library) keeps the tag — that land's activated ability is
+ *  genuinely worth knowing about.
+ *
+ *  A single ability only needs ONE of its clauses to actually produce mana, not every clause —
+ *  "Add one mana of any color. Activate only if you control a legendary creature." is still
+ *  fundamentally a mana ability, just with a condition tacked on; the condition/restriction
+ *  clause doesn't turn it into a second, different kind of ability the way a wholly separate
+ *  {cost}: line does. */
+function isManaOnlyAbilityLand(card: TaggableCard): boolean {
+  if (!combinedTypeLine(card).includes('Land')) return false
+  const lines = combinedOracleText(card)
+    .split('\n')
+    .filter((line) => line.includes(':'))
+  if (lines.length === 0) return false
+  return lines.every((line) => {
+    const effect = line.slice(line.indexOf(':') + 1)
+    const clauses = effect
+      .split('.')
+      .map((c) => c.trim())
+      .filter(Boolean)
+    return clauses.some((clause) => MANA_CLAUSE.test(clause))
+  })
+}
+
+// Basic lands get no automatically-derived tags at all — a Forest is a Forest, not "Cycle",
+// "Fixing", or whatever else Tagger/the regex fallback happens to notice about it. Every deck
+// runs a stack of basics, so any automatic tag they carry becomes the top (and most useless)
+// entry in every single Card Tags list regardless of what the deck actually does. A manual
+// global override or per-deck addition is still an explicit choice, so those still apply on top.
+function autoTagsFor(card: ScryfallCard, taggerData: TaggerCardData | undefined, pick: (data: TaggerCardData) => TaggerTagRef[]): string[] {
+  if (isBasicLand(card)) return []
+  if (taggerData) {
+    const labels = pick(taggerData).map((t) => t.label)
+    return isManaOnlyAbilityLand(card) ? labels.filter((l) => l !== 'Activated Ability') : labels
+  }
+  return [...deriveCardTags(card).keywordTags, ...deriveCardTags(card).functionalTags]
+}
+
+export function resolveCardTags(card: ScryfallCard, override?: CardTagOverride, taggerData?: TaggerCardData, userAdded?: string[]): string[] {
+  const resolved = new Set(autoTagsFor(card, taggerData, (d) => d.rollup))
   for (const tag of override?.removed ?? []) resolved.delete(tag)
   for (const tag of override?.added ?? []) resolved.add(tag)
+  for (const tag of userAdded ?? []) resolved.add(tag)
   return [...resolved].sort()
+}
+
+export interface ResolvedTag {
+  label: string
+  // True only for a tag this deck's own userCardTags added — the one kind of tag a user is
+  // allowed to remove again (see CardTagsPanel). Every other tag comes from Tagger or the
+  // regex fallback and can't be individually removed per-deck.
+  isUserAdded: boolean
+}
+
+/** Every tag Tagger has for this card — both the granular specific ones and the umbrella
+ *  rollups they collapse into (or the regex fallback's flat list, which has no specific/umbrella
+ *  split to begin with) — plus this deck's own per-card additions. The full picture, for both
+ *  the card inspect view and the Deck Editor's own Card Tags list (an umbrella-only summary
+ *  there turned out to lose too much useful detail). */
+export function resolveDetailedCardTags(
+  card: ScryfallCard,
+  override?: CardTagOverride,
+  taggerData?: TaggerCardData,
+  userAdded?: string[]
+): ResolvedTag[] {
+  const base = new Set(autoTagsFor(card, taggerData, (d) => [...d.specific, ...d.rollup]))
+  for (const tag of override?.removed ?? []) base.delete(tag)
+  for (const tag of override?.added ?? []) base.add(tag)
+  const result: ResolvedTag[] = [...base].map((label) => ({ label, isUserAdded: false }))
+  for (const tag of userAdded ?? []) {
+    if (!base.has(tag)) result.push({ label: tag, isUserAdded: true })
+  }
+  return result.sort((a, b) => a.label.localeCompare(b.label))
 }

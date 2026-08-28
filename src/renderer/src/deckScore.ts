@@ -379,8 +379,14 @@ export function computeDeckScore(params: {
   // 'auto' (default) picks the commander's most popular matching archetype; 'none' disables
   // archetype adjustments; any other value forces that specific archetype.
   archetypeKey?: string
+  // How many fully-assembled Commander Spellbook combos this exact decklist has (the
+  // `included` count from findMyCombos) — omit/null while it's still loading, or for any deck
+  // that isn't the Combo archetype, to leave the category out entirely rather than score it as
+  // zero. Only meaningful alongside the Combo archetype, so it's gated on that below rather
+  // than shown for every deck a combo piece or two happens to slip into.
+  comboCount?: number | null
 }): DeckScoreResult {
-  const { deckCards, deckColorIdentity, deckCardTagCounts, totalDeckSize, synergyOracleIds } = params
+  const { deckCards, deckColorIdentity, deckCardTagCounts, totalDeckSize, synergyOracleIds, comboCount } = params
 
   const {
     overrides,
@@ -457,6 +463,15 @@ export function computeDeckScore(params: {
   if (synergyOracleIds && synergyOracleIds.size > 0) {
     const synergyCount = deckCards.filter((c) => synergyOracleIds.has(c.oracle_id)).length
     categories.push(floorCategory('synergy', 'Commander Synergy', synergyCount, 15, 15, 'cards'))
+  }
+
+  // Archetype-specific breakdown category: a Combo deck's whole plan lives or dies on actually
+  // having combos, which the other categories (ramp/draw/removal/curve/etc.) can't see at all
+  // — those are equally applicable to any deck. More combos is never a downside (unlike ramp
+  // or removal, which can crowd out other slots), so this uses the same uncapped-floor
+  // treatment as Commander Synergy above rather than an ideal range.
+  if (appliedArchetype?.key === 'combo' && comboCount != null) {
+    categories.push(floorCategory('comboPotential', 'Combo Potential', comboCount, 3, 5, 'combos'))
   }
 
   const overall = Math.round(categories.reduce((sum, c) => sum + c.score, 0) / categories.length)

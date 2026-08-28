@@ -23,21 +23,161 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  animation: app-fade-in 0.4s ease both;
+}
+
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Shown at launch while the Playtest engine's card-database scan runs in the background —
+   gates the whole app rather than just Playtest, so the first thing anyone sees is a clean
+   loading moment instead of a fully interactive app that happens to make Playtest feel broken
+   for the next 10-70s. */
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  transition: opacity 0.35s ease;
+}
+
+.splash--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.splash__logo-stage {
+  position: relative;
+}
+
+.splash__logo {
+  display: block;
+}
+
+.splash__logo--default {
+  animation: splash-breathe 2.4s ease-in-out infinite;
+  transition: opacity 0.5s ease;
+}
+
+/* Stacked on top of the default mark, starting invisible — crossfades in as the splash hands
+   off to the main app, settling into the same school-colored logo the header will already be
+   showing underneath by the time this is fully faded out. */
+.splash__logo--school {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.splash--fading .splash__logo--default {
+  opacity: 0;
+}
+
+.splash--fading .splash__logo--school {
+  opacity: 1;
+}
+
+@keyframes splash-breathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app,
+  .splash__logo--default {
+    animation: none;
+  }
 }
 
 .app__header {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 16px 24px;
+  padding: 10px 12px 10px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  /* The app runs fully frameless (see frame:false in main/index.ts) — this header is the only
+     thing the user can grab to move the window, draggable by default, with every actual
+     control opted back out below so clicks still work normally. */
+  -webkit-app-region: drag;
+}
+
+.app__tabs button,
+.app__search,
+.account-widget,
+.language-picker,
+.window-controls {
+  -webkit-app-region: no-drag;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.window-controls__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.window-controls__button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.window-controls__button--close:hover {
+  background: #f04747;
+  color: #fff;
 }
 
 .app__header h1 {
   font-size: 18px;
   margin: 0;
   white-space: nowrap;
+}
+
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Visually enlarges the header mark without changing its layout box — a plain width bump would
+   push the "BiblioPLEX" wordmark and nav over and could grow the header's own height, which
+   isn't wanted here. transform:scale repaints bigger without touching layout at all; the
+   margin-right below just reserves the extra visual width transform: scale() doesn't (growth
+   is anchored to the left edge, so it only encroaches on the gap to the wordmark's right). */
+.app__brand-logo {
+  transform: scale(1.5);
+  transform-origin: left center;
+  margin-right: 13px;
 }
 
 .app__search {
@@ -110,6 +250,14 @@ body {
   flex: 1;
   font-size: 16px;
   margin: 0;
+}
+
+/* .set-detail__title's flex:1 assumes a horizontal toolbar row (its normal usage) — used bare
+   as a direct child of .playtest-page's flex-COLUMN layout, that same flex:1 stretches it
+   vertically instead, eating a chunk of the column's height and pushing the intro paragraph
+   down into what reads as a dead gap. Pin it back to its own content height here specifically. */
+.playtest-page > .set-detail__title {
+  flex: 0 0 auto;
 }
 
 .back-link {
@@ -206,6 +354,12 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.deck-builder__deck-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .hot-swap-overlay {
@@ -331,6 +485,285 @@ body {
   transform: translateY(-4px);
 }
 
+.card-tile.is-ghost {
+  opacity: 0.5;
+  transition:
+    transform 0.1s ease,
+    opacity 0.15s ease;
+}
+
+.card-tile.is-ghost img {
+  filter: grayscale(1);
+  transition: filter 0.15s ease;
+}
+
+/* Hovering must show a completely normal card — full color, full opacity, no blobs — not
+   whatever the animation happened to be mid-pulse. animation-play-state: paused does NOT
+   achieve that: a paused animation keeps its last-computed value in control of the property,
+   so a plain opacity: 0 alongside it is silently ignored. Clearing animation-name (not just
+   pausing it) is what actually hands opacity back to this rule. */
+.card-tile.is-ghost:hover {
+  opacity: 1;
+}
+
+.card-tile.is-ghost:hover img {
+  filter: none;
+  /* A real transparency mask (see CardTile.tsx's inline SVG defs) — clearing it on hover is what
+     actually restores a fully normal, fully opaque card, the same "hand control back to the
+     static rule, don't just pause the animation" fix as opacity above. */
+  mask: none !important;
+  -webkit-mask: none !important;
+}
+
+/* Each ellipse (see CardTile.tsx's GHOST_ELLIPSES) has its own duration and a NEGATIVE delay so
+   they're already mid-cycle on load instead of all starting in lockstep, and each spends most of
+   its (long, ~16-19s) cycle idle at 0 opacity with only a slow rise-and-fall window in the
+   middle — with 7 staggered fairly evenly across their cycles, at most 2-3 are ever in that
+   active window at once. Opacity here is animating how "dark" (== masked-out == transparent)
+   each shape is within the mask — see the mask/filter in CardTile.tsx for how that becomes an
+   actual hole in the card rather than paint on top of it.
+
+   Every animation-delay below is wrapped in calc(<base> + var(--ghost-instance-offset, 0s)) —
+   that custom property is set once per CardTile instance (random, inline style, see
+   CardTile.tsx's ghostPhaseOffset) and inherits down to these ellipses. Without it, every ghost
+   tile on screen shares the exact same static delays and animates in perfect lockstep — the
+   effect looked "mirrored" across cards instead of independent. The instance offset shifts one
+   card's whole timeline by a random amount without disturbing the relative stagger BETWEEN this
+   card's own 7 blobs (they all shift by the same amount, so their relationships to each other —
+   including the synced traveling pairs — are preserved). */
+.card-tile__ghost-ellipse {
+  opacity: 0;
+  /* fill-box: percentage-based transform values (below) are relative to THIS shape's own
+     bounding box, not the card's — so the same drift keyframe works unmodified for every
+     differently-sized/positioned ellipse. */
+  transform-box: fill-box;
+  transform-origin: center;
+  /* Two independent animations: ghost-blob-pulse (opacity, the "is it active right now" pulse)
+     and ghost-blob-drift (position/size, a slow wander so it isn't a static parked oval) — see
+     the nth-child rules below for each one's own pair of durations/delays, and ghost-blob-drift
+     itself further down for what the wander actually does. */
+  animation-name: ghost-blob-pulse, ghost-blob-drift;
+  animation-timing-function: ease-in-out, ease-in-out;
+  animation-iteration-count: infinite, infinite;
+}
+
+/* Peaks now 0.5-0.58 (previously 0.15-0.5, and 0.25-0.75 before that) — the mask's opacity
+   darkens on TOP of the card already sitting at 50% opacity (.card-tile.is-ghost), so the two
+   compound. A too-high peak (0.75) once left a spot at ~0.5*(1-0.75) = 12.5% visibility, reading
+   as "the card disappeared"; a too-low one (0.15-0.3) left barely any visible dimming at all.
+   0.5-0.58 keeps every blob's worst-case visibility around 0.5*(1-0.58) = 21% and best-case
+   around 0.5*(1-0.5) = 25% — a real, always-noticeable dip, without a spot ever vanishing.
+
+   Durations/delays: delay_i = -(i/7) * duration_i for i = 0..6 — each blob's start phase is an
+   even 1/7th step through its OWN cycle (0/7, 1/7, 2/7, ... 6/7), rather than delays chosen by
+   feel, which is what was leaving gaps where nothing happened to be active. Durations differ
+   slightly so that even phase spread doesn't stay perfectly locked forever (it'd otherwise
+   repeat identically every ~112s, the LCM-ish beat of 7 close durations, which is long enough
+   not to matter, but the drift avoids it ever looking like a fixed 7-step sequence). Combined
+   with the wider active window below (~40% of each cycle instead of ~38%'s narrower ramp), 7
+   blobs at even phase spacing keep something active almost always, without full-count pileups. */
+/* Each animation-duration/delay below is a comma-separated PAIR: pulse first, drift second —
+   CSS maps multi-value duration/delay lists positionally onto the animation-name list above.
+   Drift durations (38-53s, "very slowly") and delays are independently staggered from the pulse
+   ones so the two never fall into a shared repeating beat. */
+/* Second traveling pair (1 & 4, both near the left edge — see GHOST_ELLIPSES) — same "reach
+   toward each other" treatment as 5 & 6 below, at a different size/duration/timing-function so
+   the two pairs don't read as the same beat happening twice. cubic-bezier here is a heavier,
+   more lingering ease than the default ease-in-out — a deliberately different "personality" of
+   motion for this pair, per the per-blob easing variety idea. */
+.card-tile__ghost-ellipse:nth-child(1) {
+  --ghost-peak: 0.54;
+  animation-name: ghost-blob-pulse, ghost-blob-travel-1;
+  animation-duration: 16s, 51s;
+  animation-timing-function: ease-in-out, cubic-bezier(0.45, 0, 0.15, 1);
+  animation-delay:
+    calc(0s + var(--ghost-instance-offset, 0s)),
+    calc(0s + var(--ghost-instance-offset, 0s));
+}
+.card-tile__ghost-ellipse:nth-child(2) {
+  --ghost-peak: 0.51;
+  animation-duration: 16.6s, 47s;
+  animation-timing-function: ease-in-out, ease-in;
+  animation-delay:
+    calc(-2.37s + var(--ghost-instance-offset, 0s)),
+    calc(-6.7s + var(--ghost-instance-offset, 0s));
+}
+.card-tile__ghost-ellipse:nth-child(3) {
+  --ghost-peak: 0.57;
+  animation-duration: 17.2s, 38s;
+  animation-timing-function: ease-in-out, ease-out;
+  animation-delay:
+    calc(-4.91s + var(--ghost-instance-offset, 0s)),
+    calc(-13.4s + var(--ghost-instance-offset, 0s));
+}
+.card-tile__ghost-ellipse:nth-child(4) {
+  --ghost-peak: 0.58;
+  animation-name: ghost-blob-pulse, ghost-blob-travel-4;
+  animation-duration: 17.8s, 51s;
+  animation-timing-function: ease-in-out, cubic-bezier(0.45, 0, 0.15, 1);
+  /* Same duration+delay as nth-child(1)'s travel animation — synced cycle, opposite directions,
+     so they actually arrive at the same moment (same reasoning as the 5/6 pair below). */
+  animation-delay:
+    calc(-7.63s + var(--ghost-instance-offset, 0s)),
+    calc(0s + var(--ghost-instance-offset, 0s));
+}
+/* This pair (5 & 6) are close enough (0.6,0.5 and 0.95,0.6 — see GHOST_ELLIPSES) that instead of
+   the generic small in-place wander, they get bespoke keyframes that actually travel most of the
+   way toward each other and back — see ghost-blob-travel-5/6 below. That's the "reaches for the
+   other one to merge" lava-lamp motion, distinct from the other 5 blobs' gentle jiggle. */
+.card-tile__ghost-ellipse:nth-child(5) {
+  --ghost-peak: 0.53;
+  animation-name: ghost-blob-pulse, ghost-blob-travel-5;
+  animation-duration: 18.4s, 58s;
+  animation-delay:
+    calc(-10.51s + var(--ghost-instance-offset, 0s)),
+    calc(-26.8s + var(--ghost-instance-offset, 0s));
+}
+.card-tile__ghost-ellipse:nth-child(6) {
+  --ghost-peak: 0.55;
+  animation-name: ghost-blob-pulse, ghost-blob-travel-6;
+  animation-duration: 19s, 58s;
+  /* Same duration+delay as nth-child(5)'s travel animation, deliberately — they're traveling
+     toward EACH OTHER, so a synced cycle is what makes them actually arrive at the same time
+     (opposite directions, same phase) rather than one arriving while the other's already left. */
+  animation-delay:
+    calc(-13.57s + var(--ghost-instance-offset, 0s)),
+    calc(-26.8s + var(--ghost-instance-offset, 0s));
+}
+.card-tile__ghost-ellipse:nth-child(7) {
+  --ghost-peak: 0.5;
+  animation-duration: 19.6s, 36s;
+  animation-timing-function: ease-in-out, ease-in-out;
+  animation-delay:
+    calc(-16.8s + var(--ghost-instance-offset, 0s)),
+    calc(-40.2s + var(--ghost-instance-offset, 0s));
+}
+
+/* Dialed back from ~70% active (15%-85%) to ~44% (28%-72%) — that wider window let too many of
+   the 7 land in their active window simultaneously, and overlapping semi-transparent shapes in
+   an SVG mask don't add gently: each one composites OVER the last, so stacked coverage
+   multiplies down toward zero luminance fast (two shapes at ~0.55 peak overlapping already drops
+   to ~0.2 luminance; three drops under 0.1) — with blobs now spread edge-to-edge, that pileup
+   could cover the WHOLE card at once and wash it out almost entirely, not just a local spot.
+   ~44% active keeps the average concurrent count around 3 instead of ~5, which cuts how often
+   that pileup happens without losing the "usually something's active" feel. */
+@keyframes ghost-blob-pulse {
+  0%,
+  28%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: var(--ghost-peak, 0.55);
+  }
+  72% {
+    opacity: 0;
+  }
+}
+
+/* Slow wander in position and size (scale is relative, so it works the same regardless of a
+   given ellipse's own base rx/ry) — irregular, non-repeating-looking step sizes/directions
+   rather than a simple back-and-forth, so the goo reads as randomly reshaping and drifting
+   instead of a fixed oval sliding along one path. */
+/* rotate() added on top of the existing translate/scale wander — real lava-lamp blobs tumble as
+   they rise and fall, not just slide and resize, so a few slow degrees of turn read as
+   "churning" rather than gliding. Order matters in a transform list: translate first (moves the
+   shape) then rotate (spins it in its new spot) reads more natural than the reverse. */
+@keyframes ghost-blob-drift {
+  0% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  22% {
+    transform: translate(9%, -6%) rotate(12deg) scale(1.2);
+  }
+  41% {
+    transform: translate(-7%, 4%) rotate(-9deg) scale(0.8);
+  }
+  63% {
+    transform: translate(5%, 8%) rotate(15deg) scale(1.15);
+  }
+  85% {
+    transform: translate(-4%, -7%) rotate(-6deg) scale(0.9);
+  }
+  100% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+}
+
+/* Second traveling pair: nth-child(1) & nth-child(4), both near the left edge — see the note by
+   nth-child(1) above for why the two percentages differ so much (relative to each shape's own,
+   differently-sized bounding box) despite covering the same card-relative distance. */
+@keyframes ghost-blob-travel-1 {
+  0%,
+  100% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  35% {
+    transform: translate(-1%, 50%) rotate(-8deg) scale(1.05);
+  }
+  50% {
+    transform: translate(-2%, 110%) rotate(-16deg) scale(1.2);
+  }
+  65% {
+    transform: translate(-1%, 50%) rotate(-8deg) scale(1.05);
+  }
+}
+
+@keyframes ghost-blob-travel-4 {
+  0%,
+  100% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  35% {
+    transform: translate(1%, -29%) rotate(8deg) scale(1.05);
+  }
+  50% {
+    transform: translate(2%, -65%) rotate(16deg) scale(1.2);
+  }
+  65% {
+    transform: translate(1%, -29%) rotate(8deg) scale(1.05);
+  }
+}
+
+/* nth-child(5) and nth-child(6) (see the note on nth-child(5) above) reach toward each other
+   instead of jiggling in place — percentages are relative to EACH shape's own bounding box
+   (transform-box: fill-box), so despite traveling toward the same physical point on the card,
+   the two numbers differ a lot: nth-child(6) is the smaller shape, so covering the same
+   card-relative distance takes a much bigger percentage of its own (smaller) box. Synced timing
+   (same duration+delay on both, see above) is what makes 50% land at the same wall-clock moment
+   for both — that's the "meet in the middle" beat, eased in and back out around it. */
+@keyframes ghost-blob-travel-5 {
+  0%,
+  100% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  35% {
+    transform: translate(18%, 8%) rotate(10deg) scale(1.05);
+  }
+  50% {
+    transform: translate(40%, 17%) rotate(20deg) scale(1.2);
+  }
+  65% {
+    transform: translate(18%, 8%) rotate(10deg) scale(1.05);
+  }
+}
+
+@keyframes ghost-blob-travel-6 {
+  0%,
+  100% {
+    transform: translate(0%, 0%) rotate(0deg) scale(1);
+  }
+  35% {
+    transform: translate(-50%, -10%) rotate(-14deg) scale(1.05);
+  }
+  50% {
+    transform: translate(-111%, -22%) rotate(-28deg) scale(1.2);
+  }
+  65% {
+    transform: translate(-50%, -10%) rotate(-14deg) scale(1.05);
+  }
+}
+
 .card-tile img {
   width: 100%;
   display: block;
@@ -349,6 +782,11 @@ body {
 
 .card-tile.is-pooled img {
   outline: 3px solid #e6c229;
+  outline-offset: -3px;
+}
+
+.card-tile.is-considering img {
+  outline: 3px dashed #a78bfa;
   outline-offset: -3px;
 }
 
@@ -432,6 +870,19 @@ body {
 
 .card-tile__badge--pool {
   background: #a8871c;
+}
+
+.card-tile__considering-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(167, 139, 250, 0.92);
+  color: #1c1626;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 6px;
+  pointer-events: none;
 }
 
 .card-tile__placeholder {
@@ -678,6 +1129,16 @@ body {
   margin: 4px 0;
 }
 
+.card-detail__type-word {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.card-detail__type-word:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .card-detail__text {
   white-space: pre-wrap;
   line-height: 1.5;
@@ -747,6 +1208,59 @@ body {
   overflow-y: auto;
 }
 
+.card-detail__equipped-with {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.card-detail__equipped-with-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 90px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 11px;
+  text-align: center;
+}
+
+.card-detail__equipped-with-item img {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.card-detail__equipped-with-item:hover img {
+  outline: 2px solid var(--accent);
+}
+
+.card-detail__equipped-with-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.card-detail__equipped-with-placeholder {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.2;
+}
+
 .card-detail__rulings-list li {
   border-left: 2px solid var(--border);
   padding-left: 10px;
@@ -800,11 +1314,6 @@ body {
 .card-detail__price {
   font-size: 20px;
   font-weight: 600;
-}
-
-.card-detail__note {
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .card-detail__link {
@@ -996,52 +1505,116 @@ body {
 .sets-browser {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 640px;
+  gap: 24px;
 }
 
-.set-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.sets-browser__controls {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  padding-bottom: 4px;
 }
 
-.set-list__item {
+.sets-browser__type-row {
+  flex-wrap: wrap;
+}
+
+.set-year-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.set-year-group__heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.set-year-group__count {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.set-tile {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: none;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  transition: border-color 0.12s ease, transform 0.12s ease;
 }
 
-.set-list__item:hover {
-  background: var(--border);
+.set-tile:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
-.set-list__icon {
-  width: 20px;
-  height: 20px;
+.set-tile__icon-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.set-tile__icon {
+  width: 22px;
+  height: 22px;
   filter: invert(1);
 }
 
-.set-list__name {
+.set-tile__body {
   flex: 1;
-  font-size: 14px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.set-list__meta {
+.set-tile__name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-tile__meta {
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.set-tile__type-pill {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
   white-space: nowrap;
 }
 
@@ -1274,7 +1847,11 @@ body {
 .tag-menu-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  /* Above .card-detail-overlay's own z-index:60 — both this and .tag-menu are portaled to
+     document.body, same as the "Show More" Card Tags popup itself, so when a tag chip inside
+     that popup opens its own dropdown menu, the menu needs to out-rank the popup's overlay it's
+     sitting on top of, not just the page behind it. */
+  z-index: 65;
 }
 
 .tag-menu {
@@ -1284,7 +1861,7 @@ body {
      .deck-builder__mid-section's forced z-index:1 layers, etc.) and no amount of z-index
      tuning there won consistently; position:fixed escapes all of it in one move. */
   position: fixed;
-  z-index: 50;
+  z-index: 66;
   display: flex;
   flex-direction: column;
   min-width: 190px;
@@ -1322,18 +1899,13 @@ body {
   background: none;
 }
 
-.tag-chip.is-core-mechanic {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
-.tag-chip__star {
-  margin-right: 3px;
-  color: #ffd76a;
-}
-
 .context-menu {
   position: fixed;
-  z-index: 50;
+  /* Must out-rank .tag-menu-backdrop (z-index 65) — CardContextMenu.tsx pairs this menu with
+     that shared backdrop class, so when the backdrop's z-index was raised for an unrelated
+     dropdown (DeckBuilder's tag-menu), this menu silently ended up underneath its own backdrop,
+     which then swallowed every click meant for these buttons. */
+  z-index: 66;
   display: flex;
   flex-direction: column;
   min-width: 160px;
@@ -1655,31 +2227,6 @@ body {
   background: rgba(240, 71, 71, 0.08);
   border-radius: 8px;
   margin-bottom: 16px;
-}
-
-.deck-score__archetype-picker {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.deck-score__archetype-picker label {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-
-.deck-score__archetype-picker select {
-  padding: 7px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
 }
 
 .deck-score__archetype-note {
@@ -2087,6 +2634,12 @@ body {
   margin-top: -8px;
 }
 
+.tag-search__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tag-search__body {
   display: flex;
   gap: 20px;
@@ -2182,6 +2735,36 @@ body {
   line-height: 1;
   cursor: pointer;
   padding: 0;
+}
+
+/* A tag chip rendered as a real <button> (clicking it jumps to Tag Search) — resets the
+   button-element defaults .tag-chip's own rules don't cover, everything else matches the
+   plain <li> version exactly. */
+.tag-chip--clickable {
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tag-chip--clickable:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* A tag this deck added itself (StoredDeck.userCardTags), as opposed to one that came from
+   Scryfall Tagger or the regex fallback — a small badge, not a different chip color, so it
+   reads as "this tag, plus a note" rather than a completely different kind of tag. */
+.card-tags__user-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 4px;
+  line-height: 1.3;
 }
 
 .card-tags__add-row {
@@ -2312,6 +2895,1432 @@ body {
 
 .edhrec-tile__stats .is-negative {
   color: #f38a8a;
+}
+
+/* Playtest tab — functional layout only, deliberately unpolished until the feature works
+   end-to-end (visual pass planned once Playtest is fully implemented). Four persistent
+   rectangles: deck pickers before a game, battlefields during/after one.
+
+   This fills the window exactly (no page-level scroll) rather than the earlier "just let
+   .app__results scroll" approach — every nested flex container below carries min-height:0
+   (the actual fix; a flex item's default min-height:auto refuses to shrink below its content's
+   natural size, which is what silently broke this layout twice before), and .app__results
+   itself gets overflow:hidden here specifically (via the two-class selector's higher
+   specificity) instead of its normal overflow-y:auto. Any individual row that has more cards
+   than fits scrolls internally on its own axis — see .playtest-zone__cards /
+   .playtest-narrator — never the page. */
+.app__results.playtest-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.playtest-board-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.playtest-board-header {
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.playtest-board {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.playtest-seat {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.playtest-seat--pick {
+  position: relative;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Taken out of flow so it doesn't affect the button's centering — pinned to the block's own
+   corner instead of stacking above the button in flow order. */
+.playtest-seat__label--pick {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  z-index: 1;
+}
+
+/* Same bled-in-art treatment as the Decks list tiles (.deck-card__art-bg) — right-edge fade,
+   low opacity, sits behind everything else in the seat. */
+.playtest-seat__art-bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 60%;
+  background-size: cover;
+  background-position: center 15%;
+  opacity: 0.24;
+  z-index: 0;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to left, black 35%, transparent 100%);
+  mask-image: linear-gradient(to left, black 35%, transparent 100%);
+}
+
+.playtest-deck-button {
+  position: relative;
+  z-index: 1;
+  width: 128px;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+  overflow: hidden;
+}
+
+.playtest-deck-button:hover {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+/* Once a deck is chosen, this stops being a bordered square placeholder and just becomes the
+   commander card itself — full card aspect ratio at its own natural size, with a drop shadow,
+   rather than cropped down to fit the empty-state "+" square's fixed box. */
+.playtest-deck-button--chosen {
+  width: 110px;
+  aspect-ratio: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  gap: 8px;
+  /* The name label doesn't need to stay as narrow as the card art above it — letting it
+     overflow this box (rather than clipping/ellipsizing to 110px) is what lets it bleed wider
+     to the sides instead of getting cut off mid-word. */
+  overflow: visible;
+}
+
+.playtest-deck-button--chosen:hover {
+  border: none;
+}
+
+.playtest-deck-button--chosen img {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}
+
+.playtest-deck-button__plus {
+  font-size: 28px;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.playtest-deck-button__name {
+  font-size: 11px;
+  font-weight: 600;
+  width: 160px;
+  white-space: normal;
+  word-break: normal;
+}
+
+.playtest-seat.is-active-turn {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* The stack is a single shared MTG zone, not per-player — floats over the active player's
+   whole seat (darkening its own battlefield/hand behind it) rather than getting its own row,
+   since it's a temporary, blocking moment in the game rather than steady-state board content. */
+.playtest-stack-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 16px;
+  background: rgba(8, 8, 12, 0.78);
+}
+
+.playtest-stack-card {
+  position: relative;
+  width: 150px;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.75);
+  transition: transform 0.1s;
+}
+
+.playtest-stack-card:hover {
+  transform: translateY(-4px);
+}
+
+.playtest-stack-card img,
+.playtest-stack-card .playtest-perm__placeholder {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
+/* Only the top of the stack is actually resolving right now — the rest are just waiting. */
+.playtest-stack-card.is-resolving img,
+.playtest-stack-card.is-resolving .playtest-perm__placeholder {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.playtest-stack-card__badge {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  background: rgba(18, 18, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.playtest-seat.is-lost {
+  opacity: 0.5;
+}
+
+.playtest-seat.is-winner {
+  border-color: #e6c229;
+  box-shadow: 0 0 0 1px #e6c229;
+}
+
+.playtest-seat__label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+
+.playtest-seat__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.playtest-seat__name {
+  font-weight: 600;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playtest-seat__tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(240, 71, 71, 0.2);
+  color: #f38a8a;
+}
+
+.playtest-seat__tag--winner {
+  background: rgba(230, 194, 41, 0.2);
+  color: #e6c229;
+}
+
+.playtest-seat__life-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.playtest-seat__life {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Floating +N/-N badge that pops in next to the life total and drifts up while fading — lets a
+   life change register at a glance without reading the log line that explains it. */
+.playtest-seat__life-flash {
+  position: absolute;
+  /* Below the number, not off to the side — the side placement used to run past the edge of the
+     seat block and get clipped/hard to notice. */
+  top: calc(100% + 2px);
+  left: 50%;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: playtest-life-flash 1.3s ease-out forwards;
+}
+
+.playtest-seat__life-flash.is-gain {
+  color: #4caf50;
+}
+
+.playtest-seat__life-flash.is-loss {
+  color: #f04747;
+}
+
+@keyframes playtest-life-flash {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-2px) scale(0.9);
+  }
+  15% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(2px) scale(1.05);
+  }
+  70% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(10px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px) scale(1);
+  }
+}
+
+.playtest-seat__turn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.playtest-seat__turn-num {
+  font-weight: 700;
+}
+
+.playtest-seat__turn-step {
+  opacity: 0.7;
+  text-transform: capitalize;
+}
+
+/* Library/Graveyard badges live inline in the header now (next to the name), not their own row
+   — freed-up vertical space goes to the three card zones below instead. */
+.playtest-seat__zone {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+.playtest-seat__zone--clickable {
+  cursor: pointer;
+}
+
+.playtest-seat__zone--clickable:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.playtest-seat__zone-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.7;
+}
+
+.playtest-seat__zone-count {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.playtest-seat__commander-damage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.playtest-seat__commander-damage-pill {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+/* Split so "Player 4 3" reads as two distinct pieces at a glance instead of one run-on string —
+   the name stays a quiet neutral tone regardless of severity, the amount carries the actual
+   warning/lethal color so the number is what visually pops. */
+.playtest-seat__commander-damage-pill-name {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.playtest-seat__commander-damage-pill-amount {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.playtest-seat__commander-damage-pill.is-warning .playtest-seat__commander-damage-pill-amount {
+  color: #e6c229;
+}
+
+.playtest-seat__commander-damage-pill.is-lethal .playtest-seat__commander-damage-pill-amount {
+  color: #f38a8a;
+}
+
+.playtest-seat__commander-damage-pill.is-warning {
+  background: rgba(230, 194, 41, 0.18);
+  color: #e6c229;
+}
+
+.playtest-seat__commander-damage-pill.is-lethal {
+  background: rgba(240, 71, 71, 0.22);
+  color: #f38a8a;
+}
+
+.playtest-seat__poison-pill {
+  background: rgba(126, 211, 33, 0.16);
+  color: #9ccc4a;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.playtest-seat__poison-pill.is-warning {
+  background: rgba(230, 194, 41, 0.18);
+  color: #e6c229;
+}
+
+.playtest-seat__poison-pill.is-lethal {
+  background: rgba(240, 71, 71, 0.22);
+  color: #f38a8a;
+}
+
+/* One of these per battlefield-nonland / battlefield-land / hand — each gets a PROPORTIONAL
+   (flex-grow, not fixed-px) share of whatever vertical room the seat actually has, so the whole
+   thing scales with window size instead of forcing a scrollbar. Each row's own
+   .playtest-zone__cards still gets overflow-y:auto as a safety net for a board with unusually
+   many cards, but that's a fallback, not the normal case. */
+.playtest-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+/* Battlefield (nonland) gets the most room — power/toughness and attacking state are the most
+   important things to actually read at a glance. */
+.playtest-zone--battlefield {
+  flex: 2.2;
+}
+
+.playtest-zone--lands {
+  flex: 1;
+}
+
+/* Hand and Command Zone sit side by side (command zone to the right of the hand, per request)
+   sharing the same row's height budget that a standalone Hand row used to get on its own. */
+.playtest-hand-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+
+.playtest-hand-row .playtest-zone--hand {
+  flex: 3;
+  min-width: 0;
+}
+
+.playtest-hand-row .playtest-zone--command {
+  flex: 1;
+  min-width: 0;
+}
+
+.playtest-hand-row .playtest-zone--deck,
+.playtest-hand-row .playtest-zone--graveyard {
+  flex: 0.6;
+  min-width: 0;
+}
+
+.playtest-zone__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+/* No wrap, no scroll — every card in a zone shares that one row's width, shrinking as more
+   cards arrive (exactly like a fanned hand) instead of wrapping to a second row and needing a
+   scrollbar the user explicitly didn't want. overflow:hidden is just a hard backstop for the
+   truly degenerate case, not how this is meant to behave day to day. */
+.playtest-zone__cards {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 4px;
+  overflow: hidden;
+}
+
+/* A break between battlefield type groups (creatures/artifacts/enchantments/other) — just extra
+   space, no visible rule; fixed width and non-growing so it doesn't compete with the row's
+   shrink-to-fit cards the way another flex:1 item would. */
+.playtest-zone__divider {
+  flex: 0 0 14px;
+}
+
+.playtest-zone__empty {
+  font-size: 12px;
+  opacity: 0.5;
+  padding: 4px 0;
+}
+
+.playtest-perm {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 86px;
+  cursor: pointer;
+  border-radius: 5px;
+  /* Runs once automatically whenever a permanent tile mounts — which, since every tile is keyed
+     by its real XMage permanent id, only happens when that specific permanent is genuinely new to
+     the zone (an ETB), not on ordinary re-renders of ones already there. No JS diffing needed:
+     React's own mount/key semantics are the trigger. */
+  animation: playtest-perm-etb 0.6s ease-out;
+}
+
+@keyframes playtest-perm-etb {
+  0% {
+    box-shadow:
+      0 0 0 3px rgba(90, 200, 130, 0.9),
+      0 0 16px 4px rgba(90, 200, 130, 0.6);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(90, 200, 130, 0),
+      0 0 16px 4px rgba(90, 200, 130, 0);
+  }
+}
+
+/* A moving rainbow sheen layered over the card art via color-dodge blending — the same visual
+   language as a real foil card catching the light, for anything marked owned-in-foil back in
+   deck building (checked per-owner, since foil is tracked per-deck, not globally per-card). */
+.playtest-perm__foil-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  pointer-events: none;
+  background: linear-gradient(
+    115deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.05) 36%,
+    rgba(150, 255, 235, 0.4) 45%,
+    rgba(255, 190, 255, 0.4) 50%,
+    rgba(190, 210, 255, 0.4) 55%,
+    rgba(255, 255, 255, 0.05) 64%,
+    transparent 80%
+  );
+  background-size: 250% 250%;
+  mix-blend-mode: color-dodge;
+  animation: playtest-foil-shimmer 3.5s ease-in-out infinite;
+  z-index: 4;
+}
+
+@keyframes playtest-foil-shimmer {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playtest-perm__foil-sheen {
+    animation: none;
+    background-position: 40% 40%;
+  }
+
+  .playtest-perm {
+    animation: none;
+  }
+
+  .playtest-perm.is-attack-flash,
+  .playtest-perm.is-damage-flash,
+  .playtest-perm.is-buff-flash,
+  .playtest-perm.is-token-flash,
+  .playtest-perm.is-dealt-damage-flash {
+    animation: none;
+  }
+
+  .playtest-seat__life-flash {
+    animation: none;
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+
+  .playtest-flying-card {
+    animation: none;
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)));
+  }
+}
+
+.playtest-perm--small {
+  max-width: 54px;
+}
+
+/* Equipment/Auras nested behind whatever they're attached to — same pattern as the Decks list's
+   commander+partner stacked art (deck-card__image-stack): the group's box is exactly one card's
+   size, same as a plain .playtest-perm, so a card with something attached never inflates the
+   row's share math or grows bigger than its neighbors. The peek fills that SAME box (inset:0)
+   and is nudged out via `transform` (set inline per-attachment, see PermanentGroup) — transform
+   is paint-only, so it can visually overflow the box without affecting anything's layout size. */
+.playtest-perm-group {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 86px;
+}
+
+.playtest-perm-group > .playtest-perm:not(.playtest-perm--peek) {
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+
+.playtest-perm--peek {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+
+.playtest-perm--peek img {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.playtest-perm img {
+  width: 100%;
+  border-radius: 5px;
+  display: block;
+  transition: transform 0.15s;
+}
+
+.playtest-perm.is-tapped img {
+  transform: rotate(90deg);
+}
+
+.playtest-perm.is-attacking img {
+  outline: 3px solid #f04747;
+  outline-offset: 1px;
+}
+
+/* attackFlashIds (see updatePermanentFlashes) is cleared and repopulated once per drained tick,
+   same pattern as damage/buff below — a quick forward "step into combat" pop the instant a
+   permanent starts attacking. Kept as its own tick-diffed class rather than trying to trigger
+   directly off is-attacking (which stays continuously applied for the whole combat phase, not
+   just the moment it starts) — this way it reliably replays every time regardless of what else
+   is re-rendering on the same tile. */
+.playtest-perm.is-attack-flash {
+  animation: playtest-perm-attack-lunge 0.3s ease-out;
+}
+
+@keyframes playtest-perm-attack-lunge {
+  0% {
+    transform: scale(1) translateY(0);
+  }
+  40% {
+    transform: scale(1.08) translateY(-4px);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* damageFlashIds/buffFlashIds (see updatePermanentFlashes) are cleared and repopulated once per
+   drained tick, so these classes go present->absent->present across ticks rather than staying
+   continuously applied — each occurrence is a genuine re-toggle, so the animation correctly
+   replays every time rather than only once. */
+.playtest-perm.is-damage-flash {
+  animation: playtest-perm-damage-flash 0.4s ease-out;
+}
+
+@keyframes playtest-perm-damage-flash {
+  0% {
+    box-shadow:
+      0 0 0 3px rgba(240, 71, 71, 0.9),
+      0 0 14px 4px rgba(240, 71, 71, 0.6);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(240, 71, 71, 0),
+      0 0 14px 4px rgba(240, 71, 71, 0);
+  }
+}
+
+/* The SOURCE side of a damage exchange (see dealtDamageFlashIds) — an outward-expanding orange
+   ring + a forward pop, distinct from is-damage-flash's inward red glow on the RECIPIENT, so a
+   creature dealing damage and one taking it read as two different things even when both happen
+   in the same combat exchange on screen at once. */
+.playtest-perm.is-dealt-damage-flash {
+  animation: playtest-perm-dealt-damage-flash 0.4s ease-out;
+}
+
+@keyframes playtest-perm-dealt-damage-flash {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 138, 46, 0.85);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 10px rgba(255, 138, 46, 0);
+  }
+}
+
+.playtest-perm.is-buff-flash {
+  animation: playtest-perm-buff-flash 0.5s ease-out;
+}
+
+@keyframes playtest-perm-buff-flash {
+  0% {
+    box-shadow:
+      0 0 0 3px rgba(79, 157, 255, 0.9),
+      0 0 16px 4px rgba(79, 157, 255, 0.6);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(79, 157, 255, 0),
+      0 0 16px 4px rgba(79, 157, 255, 0);
+  }
+}
+
+/* tokenFlashIds (see updatePermanentFlashes) covers BOTH a token's first-ever mount and a token
+   that merged into an already-existing identical-token group (no fresh mount at all, just the
+   ×N count ticking up) — a distinct gold pop-scale (not the ETB glow's green box-shadow) so a
+   token specifically reads as "created", separate from any other permanent entering play. */
+.playtest-perm.is-token-flash {
+  animation: playtest-perm-token-flash 0.5s ease-out;
+}
+
+@keyframes playtest-perm-token-flash {
+  0% {
+    transform: scale(0.6);
+    box-shadow:
+      0 0 0 3px rgba(230, 194, 41, 0.9),
+      0 0 18px 6px rgba(230, 194, 41, 0.65);
+  }
+  60% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 0 0 3px rgba(230, 194, 41, 0),
+      0 0 18px 6px rgba(230, 194, 41, 0);
+  }
+}
+
+.playtest-perm__placeholder {
+  /* Matches whatever width .playtest-perm/.playtest-perm--small set on the parent, rather than
+     a hardcoded size that only fit one variant. */
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  padding: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.playtest-perm__pt {
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  background: rgba(18, 18, 24, 0.9);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Power/toughness each color independently: a genuine stat boost above the printed baseline
+   reads green, a reduction (or, for toughness, marked damage — shown as remaining effective
+   toughness, not the real "toughness" stat) reads red. Plain white when at printed value. */
+.playtest-perm__pt-value--boosted {
+  color: #4caf50;
+}
+
+.playtest-perm__pt-value--reduced,
+.playtest-perm__pt-value--damaged {
+  color: #f04747;
+}
+
+/* Identical-permanent stack count (e.g. "×50" for a wall of 1/1 tokens) — top-left so it never
+   collides with the power/toughness badge in the opposite corner. */
+.playtest-perm__count {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  z-index: 5;
+}
+
+/* Top-right — the one corner not already claimed by ×N (top-left) or P/T (bottom-right). Any
+   counter type, not just +1/+1 — a permanent's counters aren't always reflected in its P/T. */
+.playtest-perm__counters {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: #4caf50;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  z-index: 5;
+}
+
+/* Commander tax badge on a command-zone card — top-right, since count (top-left) and P/T
+   (bottom-right) already occupy the other corners on a battlefield permanent (a command-zone
+   card never carries a count/P/T badge itself, but keeping the same corner scheme reads as
+   consistent "cost to cast" info at a glance). */
+.playtest-perm__tax {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  background: rgba(18, 18, 24, 0.9);
+  color: #e6c229;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small floating panel next to an inspected battlefield card, listing what's currently
+   equipped/enchanting it — deliberately separate from CardDetail (a general-purpose component
+   used across the whole app) rather than teaching it about live-game context. */
+.playtest-picker-modal {
+  max-width: 760px;
+}
+
+.playtest-picker-source-row {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 16px;
+  padding: 12px 0 4px;
+}
+
+.playtest-picker-square-button {
+  width: 140px;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.playtest-picker-square-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.playtest-picker-back {
+  margin-top: 12px;
+}
+
+.playtest-picker-grid {
+  margin-top: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.playtest-picker-deck-list {
+  margin-top: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.playtest-picker-deck-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+  text-align: center;
+}
+
+.playtest-picker-deck-tile:hover {
+  border-color: var(--accent);
+}
+
+.playtest-picker-deck-tile img {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.playtest-picker-deck-tile__name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.playtest-graveyard-modal__cards {
+  margin-top: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+}
+
+.playtest-graveyard-modal__card {
+  position: relative;
+  width: 110px;
+  cursor: pointer;
+}
+
+.playtest-graveyard-modal__card img,
+.playtest-graveyard-modal__card .playtest-perm__placeholder {
+  width: 100%;
+  border-radius: 6px;
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.playtest-graveyard-modal__card:hover img,
+.playtest-graveyard-modal__card:hover .playtest-perm__placeholder {
+  border-color: var(--accent);
+}
+
+.playtest-graveyard-modal__card-name {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Anchors the centered pause/play button below. */
+.playtest-board {
+  position: relative;
+}
+
+.playtest-play-pause {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(18, 18, 24, 0.9);
+  color: #fff;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.playtest-play-pause:hover {
+  border-color: var(--accent);
+}
+
+.playtest-combat-arrows {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.playtest-flying-cards {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 8;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* Positioned at its takeoff point (left/top, set inline per-instance), then animates via a
+   transform built from --dx/--dy (also set inline) to its landing point — a single shared
+   keyframe driven entirely by custom properties, rather than generating a bespoke @keyframes
+   rule per flight. */
+.playtest-flying-card {
+  position: absolute;
+  width: 40px;
+  aspect-ratio: 5 / 7;
+  transform: translate(-50%, -50%);
+  animation: playtest-fly-card 0.5s ease-in-out forwards;
+}
+
+.playtest-flying-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes playtest-fly-card {
+  from {
+    transform: translate(-50%, -50%);
+  }
+  to {
+    transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy)));
+  }
+}
+
+.playtest-combat-arrows__line {
+  stroke: #e0435c;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(224, 67, 92, 0.7));
+  animation: playtest-combat-arrow-fade 0.2s ease-out;
+}
+
+.playtest-combat-arrows__line.is-blocked {
+  stroke: #e0c23c;
+  filter: drop-shadow(0 0 4px rgba(224, 194, 60, 0.7));
+}
+
+.playtest-combat-arrows__line.is-target {
+  stroke: #4f9dff;
+  filter: drop-shadow(0 0 4px rgba(79, 157, 255, 0.7));
+}
+
+.playtest-combat-arrows__head {
+  fill: #e0435c;
+}
+
+.playtest-combat-arrows__head--blocked {
+  fill: #e0c23c;
+}
+
+.playtest-combat-arrows__head--target {
+  fill: #4f9dff;
+}
+
+@keyframes playtest-combat-arrow-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.playtest-narrator-row {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.playtest-narrator {
+  flex: 1;
+  min-width: 0;
+  /* ~3 lines visible — older lines are still there, just scrolled to, not shown all at once. */
+  height: 74px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.playtest-narrator:hover {
+  border-color: var(--accent);
+}
+
+.playtest-narrator__line {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.85;
+  line-height: 1.4;
+}
+
+.playtest-narrator__line:last-child {
+  opacity: 1;
+}
+
+/* XMage's own log messages embed card names as <font color='...'>Name</font> — clickable to
+   inspect that card, separately from clicking elsewhere in the line to open the log modal. */
+.playtest-narrator__line font {
+  cursor: pointer;
+}
+
+.playtest-narrator__line font:hover {
+  text-decoration: underline;
+}
+
+.playtest-narrator-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+
+.playtest-speed-picker {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.playtest-speed-picker__button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.playtest-speed-picker__button:hover {
+  border-color: var(--accent);
+  background-color: rgba(255, 255, 255, 0.07);
+}
+
+.playtest-speed-picker__button svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* Floats ABOVE the control (not below) — this row sits at the very bottom of the board, so a
+   downward-opening menu would spill past the window edge. */
+.playtest-speed-picker__menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1c1c24;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+
+.playtest-speed-picker__option {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playtest-speed-picker__option:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.playtest-speed-picker__option.is-selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.playtest-end-game {
+  flex-shrink: 0;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 71, 71, 0.35);
+  background: rgba(240, 71, 71, 0.12);
+  color: #f38a8a;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.playtest-end-game:hover {
+  background: rgba(240, 71, 71, 0.22);
+  border-color: rgba(240, 71, 71, 0.55);
+}
+
+.playtest-narrator-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 55;
+}
+
+.playtest-narrator-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 900px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.playtest-narrator-modal__lines {
+  margin-top: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.playtest-narrator-modal__lines .playtest-narrator__line {
+  font-size: 13px;
+}
+
+.playtest-analysis-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* Above playtest-victory-overlay (70) — View Analysis can be opened from inside the Victory
+     modal, so this has to render on top of it, not behind. */
+  z-index: 80;
+}
+
+.playtest-analysis-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 1100px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.playtest-analysis__seat-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.playtest-analysis__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.playtest-analysis__fate-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.playtest-analysis__fate-heading {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.playtest-victory-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.playtest-victory-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 70;
+}
+
+.playtest-victory-modal {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid rgba(126, 231, 135, 0.4);
+  border-radius: 16px;
+  padding: 40px 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  box-shadow:
+    0 0 0 1px rgba(126, 231, 135, 0.15),
+    0 20px 60px rgba(0, 0, 0, 0.6),
+    0 0 80px rgba(126, 231, 135, 0.12);
+  animation: victory-pop-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes victory-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.playtest-victory-modal .deck-tag-filter__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.playtest-victory-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7ee787;
+  text-shadow: 0 0 24px rgba(126, 231, 135, 0.5);
+}
+
+.playtest-victory-slab {
+  /* Bigger than the picker's own version of this slab — the picker button is a small pre-game
+     control, this is the game's actual conclusion and the visual centerpiece of the popup. */
+  width: 160px;
+  cursor: default;
+}
+
+.playtest-victory-slab .playtest-deck-button__name {
+  font-size: 14px;
+}
+
+.playtest-watch-button {
+  margin-top: 12px;
 }
 
 /* Buttons & shared headings */
@@ -2587,6 +4596,11 @@ body {
   margin-top: 0;
 }
 
+.deck-builder__import-export-row {
+  display: flex;
+  gap: 8px;
+}
+
 .deck-builder__commander {
   position: relative;
   overflow: hidden;
@@ -2837,7 +4851,18 @@ body {
   height: 16px;
 }
 
+.deck-builder__add-cards-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.deck-builder__add-cards-row .secondary-button {
+  flex: 0 0 auto;
+}
+
 .add-cards-search {
+  flex: 0 0 auto;
   position: relative;
   /* .deck-builder__mid-section-art-bg ~ * (below) forces every section in this view onto its
      own z-index:1 stacking layer — including the card-results grid right after this one in the
@@ -3099,15 +5124,13 @@ body {
   width: 56px;
 }
 
-.deck-card__stat--core-mechanics {
+.deck-card__stat--archetype {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  align-items: center;
   max-width: 150px;
 }
 
-.deck-card__core-mechanic-badge {
+.deck-card__archetype-badge {
   padding: 3px 9px;
   border-radius: 10px;
   border: 1px solid var(--accent);
@@ -3210,6 +5233,30 @@ body {
   margin: 4px 0 24px;
 }
 
+.deck-builder__archetype-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deck-builder__archetype-picker label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.deck-builder__archetype-picker select {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .record-control {
   display: flex;
   align-items: center;
@@ -3256,7 +5303,951 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* Groups the language picker, account widget, and window controls as one tight cluster flush
+   against the right edge — a single margin-left:auto on the group, rather than one on each
+   child (that approach silently only ever pushed the first child; extra auto-margins on later
+   siblings have no free space left to claim once the first one takes it all). */
+.app__header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.language-picker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.language-picker:hover {
+  border-color: var(--accent);
+}
+
+/* Account widget — profile picture/username button in the app header, and its modal. */
+.account-widget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px 4px 4px;
+  cursor: pointer;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.account-widget:hover {
+  border-color: var(--accent);
+}
+
+.account-widget__label {
+  font-size: 13px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background-color: var(--border);
+  background-size: cover;
+  background-position: center;
+  color: var(--text);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.account-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 460px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 24px;
+  position: relative;
+}
+
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.account-list__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+
+.account-list__item:hover {
+  border-color: var(--accent);
+}
+
+.account-edit__picture-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.account-edit__picture-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.account-edit__picture-tabs button.is-active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.account-edit__card-search {
+  margin-bottom: 8px;
+}
+
+.account-edit__upload {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.account-edit__section-label {
+  margin: 18px 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-school-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.account-school-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.account-school {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.account-school:hover {
+  border-color: var(--accent);
+}
+
+.account-school.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+}
+
+.account-school__swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.account-edit__username-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.account-edit__username-row .filter-text {
+  flex: 1;
+}
+
 .record-winrate {
   font-size: 18px;
   font-weight: 700;
 }
+
+/* Home */
+
+.app__results--home {
+  display: flex;
+  padding: 0;
+}
+
+.home {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The home page's own "elements showing up" moment, right after the splash hands off — each
+   section staggers in a beat after the last rather than the whole page snapping in at once.
+   Fires every time HomeView mounts (not just the very first launch), which in practice means
+   "whenever you land on Home" — a small, consistent welcome rather than a one-off. */
+.home-hero,
+.home-search,
+.home-tabs {
+  animation: home-section-enter 0.5s ease both;
+}
+
+.home-search {
+  animation-delay: 0.08s;
+}
+
+.home-tabs {
+  animation-delay: 0.16s;
+}
+
+@keyframes home-section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-hero,
+  .home-search,
+  .home-tabs {
+    animation: none;
+  }
+}
+
+/* Stacking context for the school-transfer easter egg's crossfade — the base logo sits
+   underneath, a second Logo for the counterpart school is absolutely positioned on top and
+   fades in via its own opacity (driven straight off the scramble-text animation's progress, see
+   HomeView), reading as the mark itself morphing color rather than a hard swap. */
+.home-logo-stage {
+  position: relative;
+}
+
+.home-logo--overlay {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
+/* Glow hugs the logo's own silhouette (drop-shadow follows alpha, unlike a background gradient
+   which is always a rectangle/circle regardless of the shape behind it). Colored from two CSS
+   vars defaulting to the mark's own default fills (#2bb3aa teal, #176b89 navy) — HomeView sets
+   --glow-a/--glow-b inline to the signed-in student's chosen school's colors instead, so the
+   glow always matches whichever variant of the logo is actually showing. It breathes slowly
+   between a dim and a lit state — animating the filter list directly, not a wrapper element, so
+   the glow never drifts from the shape as the page reflows. */
+.home-logo {
+  margin-bottom: 4px;
+  cursor: pointer;
+  animation: home-logo-breathe 4s ease-in-out infinite;
+  /* Used when returning to the resting scale (releasing) — a touch of spring overshoot.
+     transitioning INTO .is-pressed instead uses that rule's own (quicker, firmer) transition
+     below, since the destination rule's transition wins for that direction. Only `transform`
+     is touched here — the breathing glow above runs on `filter`, so the two never fight. */
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes home-logo-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 7px color-mix(in srgb, var(--glow-a, #2bb3aa) 35%, transparent))
+      drop-shadow(0 0 15px color-mix(in srgb, var(--glow-b, #176b89) 25%, transparent));
+  }
+  50% {
+    filter: drop-shadow(0 0 15px color-mix(in srgb, var(--glow-a, #2bb3aa) 60%, transparent))
+      drop-shadow(0 0 28px color-mix(in srgb, var(--glow-b, #176b89) 42%, transparent));
+  }
+}
+
+/* Held for exactly as long as the mouse button is down (see HomeView's pointerdown/pointerup
+   handling) — press in firmly and stay there, no bounce on the way down. */
+.home-logo.is-pressed {
+  transform: scale(0.88);
+  transition: transform 0.1s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-logo {
+    animation: none;
+    filter: drop-shadow(0 0 11px color-mix(in srgb, var(--glow-a, #2bb3aa) 46%, transparent))
+      drop-shadow(0 0 21px color-mix(in srgb, var(--glow-b, #176b89) 32%, transparent));
+  }
+}
+
+.home-hero__title {
+  margin: 0;
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.home-hero__tagline {
+  margin: 0;
+  max-width: 540px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.home-hero__motto {
+  display: block;
+  margin-top: 6px;
+  font-style: italic;
+  color: var(--text);
+}
+
+.home-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 1080px;
+  margin-top: 18px;
+  padding: 14px 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.home-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.home-search__icon {
+  font-size: 16px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.home-search__input {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--text);
+  font-size: 15px;
+  min-width: 0;
+}
+
+.home-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 10px;
+  max-width: 1080px;
+  margin-top: 18px;
+}
+
+.home-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease, transform 0.12s ease;
+}
+
+.home-tab:hover {
+  border-color: var(--home-tab-color, var(--accent));
+  background: color-mix(in srgb, var(--home-tab-color, var(--accent)) 12%, var(--panel));
+  transform: translateY(-1px);
+}
+
+.home-tab__glyph {
+  font-size: 15px;
+}
+
+.home-attribution__foss {
+  margin: 28px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  animation: home-section-enter 0.5s ease both;
+  animation-delay: 0.2s;
+}
+
+.home-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 14px;
+  max-width: 1080px;
+  margin-top: 10px;
+  animation: home-section-enter 0.5s ease both;
+  animation-delay: 0.24s;
+}
+
+.home-attribution__label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.home-attribution__link {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.home-attribution__link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.home-attribution__legal {
+  max-width: 560px;
+  margin: 10px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-attribution,
+  .home-attribution__foss {
+    animation: none;
+  }
+}
+
+/* ===== Deck Editor "Playtest" (goldfish sandbox) — PlaytestGoldfishView.tsx ===== */
+
+.app__results.goldfish-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Lives in .app__results-toolbar, directly after the deck name — no longer its own row,
+   freeing that vertical space for the battlefield below. The title's normal .set-detail__title
+   flex:1 would push this group all the way to the row's right edge instead, so it's overridden
+   just here to keep the title (and this group right after it) sized to their own content. */
+.goldfish-page .app__results-toolbar .set-detail__title {
+  flex: 0 1 auto;
+}
+
+.goldfish-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.goldfish-life,
+.goldfish-turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goldfish-life__value {
+  min-width: 2.5ch;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.goldfish-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.goldfish-battlefield {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background:
+    linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-color: color-mix(in srgb, var(--panel) 60%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.goldfish-battlefield__slot {
+  position: absolute;
+  width: 112px;
+  transform: translate(-50%, -50%);
+}
+
+/* Buttons + hover preview live in one fixed-width column so the preview's left edge lines up
+   with the buttons' left edge for free, and the battlefield only cedes width to a single gap
+   (see .goldfish-layout) instead of two separate side columns. */
+.goldfish-side-panel {
+  width: 288px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Explicit width, not stretched to the side panel's full width — the panel is sized for the
+   (much wider) card preview, and the buttons stay at their own comfortable size, left-aligned
+   in the column (an explicit cross-size opts an item out of the parent's stretch default). */
+.goldfish-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 140px;
+}
+
+/* Bottom-aligned so the preview image's own bottom edge lines up with the battlefield's
+   bottom edge regardless of the image's height (see PlaytestGoldfishView's comment on
+   hoverPreview). Grows to fill the column's leftover vertical space below the buttons. */
+.goldfish-preview-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.goldfish-preview-panel img {
+  width: 100%;
+  display: block;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+.goldfish-zones {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Uniform gap above the zone label (from the play area) and below it (to the card strip) —
+   overrides the global .section-heading's mismatched 28px/12px default. */
+.goldfish-zones .section-heading {
+  margin: 16px 0 16px;
+}
+
+/* Library/Graveyard/Exile/Command labels center over their (now fixed-width) block instead of
+   hugging the left edge — left off Hand, whose heading reads left-to-right with its wider strip. */
+.goldfish-zone:not(.goldfish-zone--hand) .section-heading {
+  text-align: center;
+}
+
+.goldfish-zone {
+  min-width: 0;
+}
+
+.goldfish-zone--hand {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Library/Graveyard/Exile/Command all stay the same fixed width regardless of contents (wide
+   enough that "COMMAND ZONE"/"GRAVEYARD (0)" never wrap to a second line) — taken out of the
+   Hand strip's share of the row, not added on top of it. */
+.goldfish-zone:not(.goldfish-zone--hand) {
+  flex: 0 0 150px;
+}
+
+/* A lone card (library back, a single commander) centers in the extra width instead of
+   sticking to the strip's left edge. Left off .goldfish-zone--hand so a full/overflowing hand
+   still scrolls normally from its start. */
+.goldfish-zone:not(.goldfish-zone--hand) .goldfish-zone__strip {
+  justify-content: center;
+  align-items: center;
+}
+
+.goldfish-zone__strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+  min-height: 120px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+/* Spacing between hand cards is computed per-card in PlaytestGoldfishView (handCardPitch) via
+   marginLeft on each .goldfish-hand-slot, so the strip's own gap is zeroed out here — otherwise
+   it would add on top of that margin and throw off the fit-to-width math. */
+.goldfish-zone__strip--hand {
+  gap: 0;
+}
+
+.goldfish-hand-slot {
+  flex-shrink: 0;
+}
+
+.goldfish-card {
+  position: relative;
+  width: 105px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.goldfish-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.goldfish-card img {
+  width: 100%;
+  display: block;
+  border-radius: 8px;
+}
+
+.goldfish-card__placeholder {
+  width: 100%;
+  aspect-ratio: 5 / 7;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* Tapped rotates in place — the slot's own translate(-50%, -50%) centering (battlefield__slot)
+   stays intact since this is a second transform on the inner card, not the positioned slot. */
+.goldfish-card.is-tapped {
+  transform: rotate(90deg);
+}
+
+.goldfish-card.is-tapped:hover {
+  transform: rotate(90deg) translateY(-3px);
+}
+
+.goldfish-card--library-stack {
+  cursor: default;
+}
+
+.goldfish-card--library-stack:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Top-left "COPY" tag for a duplicated card (right-click > Copy Card / X shortcut). */
+.goldfish-card__copy-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 1px 4px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+/* Bottom-right power/toughness readout — mimics a printed P/T box. Clickable directly
+   (left: +1/+1, right: -1/-1) — independent of the counter badge below. */
+.goldfish-card__power {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.goldfish-card__power.is-buffed {
+  color: #6bdc7c;
+}
+
+.goldfish-card__power.is-debuffed {
+  color: #ef6b6b;
+}
+
+/* Bottom-left counter readout — only shown once a card actually has counters; the first one is
+   added via the right-click menu's "Add Counter", then this badge takes over for quick +/-. */
+.goldfish-card__counter {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* "Card drawn" / "Library shuffled" callout — absolutely positioned over the battlefield's own
+   top-right corner so it never reflows the surrounding layout (the zones below are already
+   sized exactly right). Self-clears (see showAction in PlaytestGoldfishView). */
+.goldfish-action-toast {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  color: #e6c94a;
+  font-size: 13px;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.goldfish-power-prompt {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.goldfish-power-prompt__input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.goldfish-power-prompt__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Off-screen, but actually loaded/decoded — a real element setDragImage can point at so the
+   library's drag ghost shows the top card's real face instead of its face-down back. */
+.goldfish-drag-source {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  width: 84px;
+  pointer-events: none;
+}
+
+.goldfish-zone__strip--command {
+  position: relative;
+}
+
+/* Commander tax — persists in the Command Zone's own corner even while the commander itself is
+   out on the battlefield (or anywhere else), matching how the real rule works. Clickable
+   directly (left: +1 cast, right: -1 cast) same as the other badges. */
+/* Mana cost pips shown above a hovered hand/command-zone card — position: fixed (see the
+   PlaytestGoldfishView comment on manaCostHover) so it escapes the zone strip's overflow-x:auto
+   without needing any zone to resize. Anchored by its bottom-center to the tile's own top edge. */
+.goldfish-mana-hover {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 6px));
+  z-index: 45;
+  display: flex;
+  gap: 2px;
+  padding: 3px 6px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.goldfish-mana-hover__pip {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.goldfish-command-tax {
+  position: absolute;
+  right: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Persistent bottom status strip for the Card Tag / Combo index builds (see
+   indexBuildStore.ts) — portaled to document.body and position:fixed so it floats above every
+   screen's own content without shrinking it (no layout participation, no reserved space in
+   .app__body), and stays visible across tab navigation since the underlying build keeps running
+   in the main process regardless of what's mounted. Above every other portaled overlay
+   (.tag-menu tops out at 66) since it's meant to always be reachable, even with a modal open. */
+.index-build-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.index-build-bar__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+}
+
+.index-build-bar__row + .index-build-bar__row {
+  border-top: 1px solid var(--border);
+}
+
+.index-build-bar__label {
+  flex: 0 0 auto;
+  min-width: 240px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.index-build-bar__track {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.index-build-bar__fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.index-build-bar__fill.is-indeterminate {
+  width: 35%;
+  animation: index-build-bar-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes index-build-bar-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(285%);
+  }
+}
+
+.index-build-bar__cancel {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.index-build-bar__cancel:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+

@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import CardTile from './CardTile'
 import CardResults from './CardResults'
 import CardDetail from './CardDetail'
 import CommanderView from './CommanderView'
+import PlaytestGoldfishView from './PlaytestGoldfishView'
 import ColorPips from './ColorPips'
 import TagSearchView from './TagSearchView'
+import TypeSearchView from './TypeSearchView'
 import DeckAnalyticsView from './DeckAnalyticsView'
 import DeckScoreView from './DeckScoreView'
 import DeckCombosView from './DeckCombosView'
@@ -20,15 +22,18 @@ import {
   CARD_CATEGORIES,
   categorizeCard,
   countBasicLands,
+  DECK_GROUP_MODE_LABELS,
   deriveTokens,
   getIllegalReason,
-  groupCardsByCategory,
+  groupDeckCards,
   isBasicLand,
+  primarySubtype,
   swapPrinting,
   swapPrintingAtOccurrence,
   toggleCardInDeck,
   toggleIdInList,
   type CardCategory,
+  type DeckGroupMode,
   type DerivedToken
 } from '../deckLogic'
 import CardContextMenu from './CardContextMenu'
@@ -36,11 +41,14 @@ import { scryfallImageUrl } from '../scryfallImage'
 import { winRate, winRateColor } from '../winRate'
 import { bracketColor } from '../bracketColor'
 import { detectSecondCommanderMode, secondCommanderQuery } from '../partnerEligibility'
-import { resolveCardTags, type CardTagOverride } from '../cardTagging'
+import { playSwapSound } from '../clickSound'
+import { resolveCardTags, resolveDetailedCardTags, type CardTagOverride, type TaggerCardData } from '../cardTagging'
+import { ARCHETYPE_OPTIONS } from '../deckScore'
 import {
   isError,
   type Bracket,
   type CommanderTagIndex,
+  type LogicRule,
   type ScryfallCard,
   type ScryfallSearchResult,
   type StoredDeck
@@ -85,10 +93,14 @@ const DECK_CATEGORY_DASH_COLORS: Record<string, string> = {
 
 // Shared by the Deck/Card Pool/Want tabs' category sidebars — each tab gets its own instance
 // (collapse state and scroll targets are per-tab, not shared) but the behavior is identical.
-function useCategorySidebar(initiallyCollapsed: string[] = []) {
+// pageTopRef is shared across all three instances (see DeckBuilder's own pageTopRef, attached to
+// the outermost .app__results div) — "Back to Top" used to scroll to this section's OWN heading
+// (e.g. "Deck (N cards)"), which sits well below the tab bar and "← My Decks" back link. That
+// read as "back to top" only taking you to the first category, not actually to the top of the
+// page — scrolling to the true shared top instead is what was asked for.
+function useCategorySidebar(pageTopRef: RefObject<HTMLElement | null>, initiallyCollapsed: string[] = []) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initiallyCollapsed))
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map())
-  const topRef = useRef<HTMLHeadingElement>(null)
 
   function toggleCollapsed(category: string): void {
     setCollapsed((prev) => {
@@ -104,10 +116,15 @@ function useCategorySidebar(initiallyCollapsed: string[] = []) {
   }
 
   function scrollToTop(): void {
-    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // pageTopRef points at .app__results itself — the actual scrolling element (overflow-y:
+    // auto), not a child of it. scrollIntoView scrolls the nearest scrollable ANCESTOR of its
+    // target, so calling it here tried to scroll whatever's above .app__results (nothing
+    // actually scrolls there), which is why this silently did nothing. Scrolling the container
+    // directly is the correct call when the ref IS the scroller, not content inside it.
+    pageTopRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  return { collapsed, toggleCollapsed, sectionRefs, topRef, scrollToSection, scrollToTop }
+  return { collapsed, toggleCollapsed, sectionRefs, scrollToSection, scrollToTop }
 }
 
 interface Props {
@@ -115,7 +132,17 @@ interface Props {
   onBack: () => void
 }
 
-type View = 'deck' | 'cardPool' | 'want' | 'analytics' | 'score' | 'combos' | 'recommendations' | 'tagSearch'
+type View =
+  | 'deck'
+  | 'cardPool'
+  | 'want'
+  | 'analytics'
+  | 'score'
+  | 'combos'
+  | 'recommendations'
+  | 'tagSearch'
+  | 'typeSearch'
+  | 'goldfish'
 
 export default function DeckBuilder({ deckId, onBack }: Props) {
   const [storedDeck, setStoredDeck] = useState<StoredDeck | null>(null)
@@ -168,17 +195,24 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     x: number
     y: number
   } | null>(null)
+  const [deckCardContextMenu, setDeckCardContextMenu] = useState<{ card: ScryfallCard; x: number; y: number } | null>(
+    null
+  )
   const [viewingTokenName, setViewingTokenName] = useState<string | null>(null)
   const [draggedId, setDraggedId] = useState<string | null>(null)
   // Which slot is currently being dragged over — separate from draggedId (the card being
   // lifted) so the drop target itself can get a distinct highlight, not just the dragged card
   // dimming. Native HTML5 drag-and-drop gives no feedback at all otherwise.
   const [dragOverId, setDragOverId] = useState<string | null>(null)
-  const deckSidebar = useCategorySidebar()
-  const poolSidebar = useCategorySidebar(['OnDeck'])
-  const wantSidebar = useCategorySidebar()
+  // Shared "Back to Top" target for all three category sidebars below — see the outermost
+  // <div className="app__results" ref={pageTopRef}> in the JSX, which holds the tab bar and
+  // "← My Decks" back link.
+  const pageTopRef = useRef<HTMLDivElement>(null)
+  const deckSidebar = useCategorySidebar(pageTopRef)
+  const poolSidebar = useCategorySidebar(pageTopRef, ['OnDeck'])
+  const wantSidebar = useCategorySidebar(pageTopRef)
   const [hotSwapOpen, setHotSwapOpen] = useState(false)
-  const [hotSwapDeckCategory, setHotSwapDeckCategory] = useState<CardCategory>('Creature')
+  const [hotSwapDeckCategory, setHotSwapDeckCategory] = useState<CardCategory | 'Considering'>('Creature')
   const [hotSwapPoolCategory, setHotSwapPoolCategory] = useState<CardCategory>('Creature')
   const [hotSwapDragCard, setHotSwapDragCard] = useState<ScryfallCard | null>(null)
   const [hotSwapDragSource, setHotSwapDragSource] = useState<'deck' | 'pool' | null>(null)
@@ -195,8 +229,17 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [cardTagOverrides, setCardTagOverrides] = useState<Map<string, CardTagOverride>>(new Map())
+  // Scryfall Tagger data for every card in the deck, batch-fetched alongside the overrides
+  // above — see resolveCardTags in cardTagging.ts for how this combines with the regex
+  // fallback and this deck's own userCardTags additions.
+  const [taggerDataByOracleId, setTaggerDataByOracleId] = useState<Map<string, TaggerCardData>>(new Map())
   const [activeSearchTags, setActiveSearchTags] = useState<string[]>([])
-  const [showAllTags, setShowAllTags] = useState(false)
+  const [activeSearchTerms, setActiveSearchTerms] = useState<string[]>([])
+  // "Show More" opens a popup listing every tag in the deck, rather than expanding the inline
+  // row in place — with the full specific+rollup tag list now shown (not just umbrella
+  // categories), the inline row could otherwise grow long enough to push the rest of the page
+  // down awkwardly.
+  const [tagsModalOpen, setTagsModalOpen] = useState(false)
   // Carries the trigger chip's own screen position so the menu can be position:fixed
   // (viewport-anchored, like CardContextMenu) instead of position:absolute nested inside
   // .tag-row — the nested version kept losing stacking fights against later sibling sections
@@ -231,6 +274,15 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     skippedCommander: string[]
     notFound: string[]
   } | null>(null)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportText, setExportText] = useState('')
+  const [exportCopied, setExportCopied] = useState(false)
+  const [logicModalOpen, setLogicModalOpen] = useState(false)
+  const [logicText, setLogicText] = useState('')
+  const [logicError, setLogicError] = useState<string | null>(null)
+  const [logicWarnings, setLogicWarnings] = useState<string[]>([])
+  const [logicImporting, setLogicImporting] = useState(false)
+  const [logicImportedCount, setLogicImportedCount] = useState<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -301,7 +353,16 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   // The commander (and partner/background, if any) are part of the 100-card deck total —
   // deckCards only holds the non-commander cardIds, so the displayed count needs the +1/+2.
   const totalDeckSize = deckCards.length + 1 + (storedDeck?.partnerCommanderId ? 1 : 0)
-  const categoryGroups = useMemo(() => groupCardsByCategory(deckCards), [deckCards])
+  // Deliberately NOT persisted (no localStorage, unlike DecksBrowser's simplified-view toggle) —
+  // opening a deck should always start from the default Type grouping, not whatever mode was
+  // last used somewhere else.
+  const [deckGroupMode, setDeckGroupMode] = useState<DeckGroupMode>('type')
+  const [poolGroupMode, setPoolGroupMode] = useState<DeckGroupMode>('type')
+  const [wantGroupMode, setWantGroupMode] = useState<DeckGroupMode>('type')
+  const [groupMenuAnchor, setGroupMenuAnchor] = useState<{ for: 'deck' | 'cardPool' | 'want'; x: number; y: number } | null>(
+    null
+  )
+  const categoryGroups = useMemo(() => groupDeckCards(deckCards, deckGroupMode), [deckCards, deckGroupMode])
   const basicLandCounts = useMemo(() => countBasicLands(deckCards), [deckCards])
   const deckColorIdentity = useMemo(() => {
     const colors = new Set<string>()
@@ -352,6 +413,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const wantOracleIds = useMemo(() => new Set(wantCards.map((c) => c.oracle_id)), [wantCards])
   const cardPoolOracleIds = useMemo(() => new Set(cardPoolCards.map((c) => c.oracle_id)), [cardPoolCards])
   const foilIdSet = useMemo(() => new Set(storedDeck?.foilIds ?? []), [storedDeck?.foilIds])
+  const consideringIdSet = useMemo(() => new Set(storedDeck?.consideringIds ?? []), [storedDeck?.consideringIds])
 
   // "On Deck" is its own bucket ahead of the type categories — a pool card already in the
   // deck has nothing left to do with it, so it's worth calling out separately rather than
@@ -359,19 +421,32 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const poolCategoryGroups = useMemo(() => {
     const onDeck = cardPoolCards.filter((c) => deckOracleIds.has(c.oracle_id))
     const rest = cardPoolCards.filter((c) => !deckOracleIds.has(c.oracle_id))
-    const groups: { category: string; cards: ScryfallCard[] }[] = [...groupCardsByCategory(rest)]
-    if (onDeck.length > 0) groups.push({ category: 'OnDeck', cards: onDeck })
+    const groups = [...groupDeckCards(rest, poolGroupMode)]
+    if (onDeck.length > 0) {
+      groups.push({
+        category: 'OnDeck',
+        label: DECK_CATEGORY_LABELS.OnDeck,
+        dashColor: DECK_CATEGORY_DASH_COLORS.OnDeck,
+        cards: onDeck
+      })
+    }
     return groups
-  }, [cardPoolCards, deckOracleIds])
+  }, [cardPoolCards, deckOracleIds, poolGroupMode])
 
-  const wantCategoryGroups = useMemo(() => groupCardsByCategory(wantCards), [wantCards])
+  const wantCategoryGroups = useMemo(() => groupDeckCards(wantCards, wantGroupMode), [wantCards, wantGroupMode])
 
   // Hot Swap's two columns: the deck side is just "cards of this type currently in the deck";
   // the pool side deliberately excludes cards already in the deck (same "on deck" cards the
   // Card Pool tab carves out) — nothing to swap in for a card you're already running.
+  // "Considering" is a synthetic category only the deck side offers — it cuts across the real
+  // type categories to surface exactly the cards flagged for possible removal, which is the
+  // whole point of pairing them up against the Pool side to find a replacement.
   const hotSwapDeckCards = useMemo(
-    () => deckCards.filter((c) => categorizeCard(c) === hotSwapDeckCategory),
-    [deckCards, hotSwapDeckCategory]
+    () =>
+      hotSwapDeckCategory === 'Considering'
+        ? deckCards.filter((c) => consideringIdSet.has(c.id))
+        : deckCards.filter((c) => categorizeCard(c) === hotSwapDeckCategory),
+    [deckCards, hotSwapDeckCategory, consideringIdSet]
   )
   const hotSwapPoolCards = useMemo(
     () =>
@@ -391,6 +466,14 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   async function toggleFoil(key: string): Promise<void> {
     if (!storedDeck) return
     await persist({ foilIds: toggleIdInList(storedDeck.foilIds, key) })
+  }
+
+  // Keyed by plain card id, not by occurrence — unlike foil status, "considering this for
+  // removal" is about the card itself; a duplicate basic land sharing that id gets flagged as a
+  // set together, which is the rare case that only matters for lands anyway.
+  async function toggleConsidering(id: string): Promise<void> {
+    if (!storedDeck) return
+    await persist({ consideringIds: toggleIdInList(storedDeck.consideringIds, id) })
   }
 
   function getMarker(card: ScryfallCard): 'want' | 'pool' | undefined {
@@ -417,6 +500,23 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     window.api.getCardTagOverridesBatch(oracleIds).then((map) => {
       if (cancelled) return
       setCardTagOverrides(new Map(Object.entries(map)))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [deckCards])
+
+  // Same batch-fetch shape as the overrides above, for Scryfall Tagger's own data.
+  useEffect(() => {
+    let cancelled = false
+    const oracleIds = [...new Set(deckCards.map((c) => c.oracle_id))]
+    if (oracleIds.length === 0) {
+      setTaggerDataByOracleId(new Map())
+      return
+    }
+    window.api.getTaggerDataBatch(oracleIds).then((map) => {
+      if (cancelled) return
+      setTaggerDataByOracleId(new Map(Object.entries(map)))
     })
     return () => {
       cancelled = true
@@ -494,40 +594,31 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const deckCardTagCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const card of deckCards) {
-      const tags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+      // Full specific+rollup list, not resolveCardTags' umbrella-only summary — an umbrella-only
+      // Card Tags list lost too much useful detail (every removal spell just read "Removal",
+      // with no way to tell a board wipe from a one-for-one apart at a glance).
+      const tags = resolveDetailedCardTags(
+        card,
+        cardTagOverrides.get(card.oracle_id),
+        taggerDataByOracleId.get(card.oracle_id),
+        storedDeck?.userCardTags?.[card.oracle_id]
+      ).map((t) => t.label)
       for (const tag of tags) counts.set(tag, (counts.get(tag) ?? 0) + 1)
     }
-    // Chosen Core Mechanics always lead the list — regardless of card count — so they never
-    // get pushed past the "Show More" cutoff by tags that just happen to have more cards.
-    const coreMechanics = new Set(storedDeck?.coreMechanicTags ?? [])
-    return [...counts.entries()]
-      .map(([tag, count]) => ({ tag, count }))
-      .sort((a, b) => {
-        const aCore = coreMechanics.has(a.tag)
-        const bCore = coreMechanics.has(b.tag)
-        if (aCore !== bCore) return aCore ? -1 : 1
-        return b.count - a.count
-      })
-  }, [deckCards, cardTagOverrides, storedDeck?.coreMechanicTags])
-
-  // Keeps a deck's stored Core Mechanics order in sync with their live count order (most-
-  // represented first) — the Decks list renders coreMechanicTags top to bottom exactly as
-  // stored, with no per-card tag data of its own to re-derive that order, so this is the one
-  // place it can ever get corrected. Runs for decks picked before this ordering existed (was
-  // append order) and keeps re-syncing afterward if card changes shift the relative counts.
-  useEffect(() => {
-    if (!storedDeck || storedDeck.coreMechanicTags.length < 2) return
-    const countByTag = new Map(deckCardTagCounts.map((t) => [t.tag, t.count]))
-    const sorted = [...storedDeck.coreMechanicTags].sort((a, b) => (countByTag.get(b) ?? 0) - (countByTag.get(a) ?? 0))
-    const alreadySorted = sorted.every((tag, i) => tag === storedDeck.coreMechanicTags[i])
-    if (!alreadySorted) persist({ coreMechanicTags: sorted })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storedDeck?.id, deckCardTagCounts])
+    return [...counts.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count)
+  }, [deckCards, cardTagOverrides, taggerDataByOracleId, storedDeck?.userCardTags])
 
   const deckTagFilterCards = useMemo(() => {
     if (!deckTagFilter) return []
-    return deckCards.filter((card) => resolveCardTags(card, cardTagOverrides.get(card.oracle_id)).includes(deckTagFilter))
-  }, [deckTagFilter, deckCards, cardTagOverrides])
+    return deckCards.filter((card) =>
+      resolveDetailedCardTags(
+        card,
+        cardTagOverrides.get(card.oracle_id),
+        taggerDataByOracleId.get(card.oracle_id),
+        storedDeck?.userCardTags?.[card.oracle_id]
+      ).some((t) => t.label === deckTagFilter)
+    )
+  }, [deckTagFilter, deckCards, cardTagOverrides, taggerDataByOracleId, storedDeck?.userCardTags])
 
   async function persist(patch: {
     cardIds?: string[]
@@ -544,36 +635,46 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     cardPoolIds?: string[]
     wantIds?: string[]
     foilIds?: string[]
+    consideringIds?: string[]
     lastScore?: StoredDeck['lastScore']
-    coreMechanicTags?: string[]
+    archetypeKey?: string
+    logicFile?: StoredDeck['logicFile']
+    userCardTags?: Record<string, string[]>
   }): Promise<void> {
     if (!storedDeck) return
     setStoredDeck({ ...storedDeck, ...patch })
     await window.api.updateDeck(storedDeck.id, patch)
   }
 
-  const MAX_CORE_MECHANICS = 3
-
-  // Toggles a Card Tag in/out of this deck's up-to-3 "Core Mechanics" — the tags shown on its
-  // My Decks tile. Silently no-ops past the cap rather than bumping the oldest pick, so the
-  // menu option just reads "disabled" instead of surprising the user by evicting a choice.
-  function toggleCoreMechanic(tag: string): void {
+  // Per-deck card tag additions (see StoredDeck.userCardTags) — a card can function differently
+  // in different decks, so a user-added tag only ever applies to this one deck's copy of it,
+  // never the card globally. Purely additive: there's no removed-tags list, since the only tag
+  // a user can ever take back off here is one they themselves added.
+  function addUserCardTag(oracleId: string, tag: string): void {
     if (!storedDeck) return
-    const current = storedDeck.coreMechanicTags
-    let next: string[]
-    if (current.includes(tag)) {
-      next = current.filter((t) => t !== tag)
-    } else if (current.length < MAX_CORE_MECHANICS) {
-      next = [...current, tag]
-    } else {
-      return
+    const current = storedDeck.userCardTags?.[oracleId] ?? []
+    if (current.includes(tag)) return
+    persist({ userCardTags: { ...storedDeck.userCardTags, [oracleId]: [...current, tag] } })
+  }
+
+  function removeUserCardTag(oracleId: string, tag: string): void {
+    if (!storedDeck) return
+    const current = storedDeck.userCardTags?.[oracleId] ?? []
+    persist({ userCardTags: { ...storedDeck.userCardTags, [oracleId]: current.filter((t) => t !== tag) } })
+  }
+
+  // Spread into a CardDetail deckMode object so its Tags panel can show/edit this deck's own
+  // additions for whichever card is being inspected.
+  function userTagDeckModeProps(oracleId: string): {
+    userTags: string[]
+    onAddUserTag: (tag: string) => void
+    onRemoveUserTag: (tag: string) => void
+  } {
+    return {
+      userTags: storedDeck?.userCardTags?.[oracleId] ?? [],
+      onAddUserTag: (tag: string) => addUserCardTag(oracleId, tag),
+      onRemoveUserTag: (tag: string) => removeUserCardTag(oracleId, tag)
     }
-    // Stored in the same order they'd appear in the Card Tags list (most-represented first) —
-    // the Decks list just renders this array top to bottom as-is, since it doesn't load full
-    // per-card tag data for every deck and so can't re-derive this order itself.
-    const countByTag = new Map(deckCardTagCounts.map((t) => [t.tag, t.count]))
-    next.sort((a, b) => (countByTag.get(b) ?? 0) - (countByTag.get(a) ?? 0))
-    persist({ coreMechanicTags: next })
   }
 
   function addWin(): void {
@@ -786,6 +887,112 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     setImportResult(null)
   }
 
+  const KNOWN_LOGIC_RULE_TYPES = new Set(['holdInstantUntilAttackTrigger'])
+
+  function closeLogicModal(): void {
+    setLogicModalOpen(false)
+    setLogicText('')
+    setLogicError(null)
+    setLogicWarnings([])
+    setLogicImportedCount(null)
+  }
+
+  // Validates and saves a Logic file (see docs/logic-file-guide.md) — the app only ever reads
+  // these, never generates them; validation is deliberately strict on shape (unknown rule
+  // "type" is a hard error, not silently ignored, so an authoring mistake in an external Claude
+  // conversation surfaces immediately) but only warns (doesn't block) on a permanentNames entry
+  // that isn't actually in this deck, since that's just as likely a stale note as a typo.
+  async function handleImportLogic(): Promise<void> {
+    if (!storedDeck) return
+    setLogicError(null)
+    setLogicWarnings([])
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(logicText)
+    } catch {
+      setLogicError('Not valid JSON.')
+      return
+    }
+    const obj = parsed as Record<string, unknown>
+    if (obj.biblioplexLogicFile !== true || typeof obj.version !== 'number' || !Array.isArray(obj.rules)) {
+      setLogicError(
+        'Not a recognized Logic file — expected "biblioplexLogicFile": true, a numeric "version", and a "rules" array. See docs/logic-file-guide.md.'
+      )
+      return
+    }
+
+    const rules: LogicRule[] = []
+    for (const [i, entry] of (obj.rules as unknown[]).entries()) {
+      const rule = entry as Record<string, unknown>
+      if (typeof rule.type !== 'string' || !KNOWN_LOGIC_RULE_TYPES.has(rule.type)) {
+        setLogicError(`Rule ${i + 1} has an unrecognized "type": ${String(rule.type)}. Supported: ${[...KNOWN_LOGIC_RULE_TYPES].join(', ')}.`)
+        return
+      }
+      if (
+        !Array.isArray(rule.permanentNames) ||
+        rule.permanentNames.length === 0 ||
+        !rule.permanentNames.every((n) => typeof n === 'string')
+      ) {
+        setLogicError(`Rule ${i + 1} needs a non-empty "permanentNames" array of card names.`)
+        return
+      }
+      rules.push({
+        type: rule.type as LogicRule['type'],
+        permanentNames: rule.permanentNames as string[],
+        ...(typeof rule.note === 'string' ? { note: rule.note } : {})
+      })
+    }
+
+    const deckCardNames = new Set(
+      [storedDeck.commanderName, storedDeck.partnerCommanderName, ...deckCards.map((c) => c.name)]
+        .filter((n): n is string => Boolean(n))
+        .map((n) => n.toLowerCase())
+    )
+    const unknownNames = [...new Set(rules.flatMap((r) => r.permanentNames))].filter(
+      (n) => !deckCardNames.has(n.toLowerCase())
+    )
+
+    setLogicImporting(true)
+    try {
+      await persist({ logicFile: { version: obj.version as number, rules } })
+      setLogicWarnings(unknownNames.length > 0 ? [`Not found in this deck: ${unknownNames.join(', ')}`] : [])
+      setLogicImportedCount(rules.length)
+    } finally {
+      setLogicImporting(false)
+    }
+  }
+
+  function handleRemoveLogic(): void {
+    void persist({ logicFile: null })
+  }
+
+  // Same "<count> <name>" plain-text format the Decks list's own Export Deck produces (see
+  // DecksBrowser's handleExport) — deliberately without set/collector-number info, since pasting
+  // into another site's bulk-import box is the actual common case, and this deck is already
+  // fully loaded here so there's no need to re-fetch card data the way the list view has to.
+  function handleExportDeck(): void {
+    if (!storedDeck) return
+    const nameCounts = new Map<string, number>()
+    for (const card of deckCards) {
+      nameCounts.set(card.name, (nameCounts.get(card.name) ?? 0) + 1)
+    }
+    const mainLines = [...nameCounts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => `${count} ${name}`)
+
+    const commanderLines = [`1 ${storedDeck.commanderName}`]
+    if (storedDeck.partnerCommanderId && storedDeck.partnerCommanderName) commanderLines.push(`1 ${storedDeck.partnerCommanderName}`)
+
+    setExportCopied(false)
+    setExportText([...commanderLines, '', ...mainLines].join('\n'))
+    setExportModalOpen(true)
+  }
+
+  async function copyExportText(): Promise<void> {
+    await navigator.clipboard.writeText(exportText)
+    setExportCopied(true)
+    window.setTimeout(() => setExportCopied(false), 1500)
+  }
+
   async function toggleCardPool(card: ScryfallCard): Promise<void> {
     if (!storedDeck || isBasicLand(card)) return
     const next = toggleIdInList(storedDeck.cardPoolIds, card.id)
@@ -861,12 +1068,40 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     setPoolWantContextMenu({ card, list, x: e.clientX, y: e.clientY })
   }
 
+  function handleDeckCardContextMenu(card: ScryfallCard, e: React.MouseEvent): void {
+    e.preventDefault()
+    setDeckCardContextMenu({ card, x: e.clientX, y: e.clientY })
+  }
+
   async function handleRemoveId(id: string): Promise<void> {
     if (!storedDeck) return
     const idx = storedDeck.cardIds.indexOf(id)
     if (idx === -1) return
     const newIds = [...storedDeck.cardIds.slice(0, idx), ...storedDeck.cardIds.slice(idx + 1)]
-    await persist({ cardIds: newIds })
+    // Only drop the Considering flag once every copy of this id is gone — a duplicate basic
+    // land shares one id, and removing just one copy shouldn't un-flag the rest.
+    const stillInDeck = newIds.includes(id)
+    await persist({
+      cardIds: newIds,
+      consideringIds: stillInDeck ? storedDeck.consideringIds : storedDeck.consideringIds.filter((cid) => cid !== id)
+    })
+  }
+
+  // "Move to Pool" from the deck grid: leaves the deck's 99 but stays tracked as owned via the
+  // Card Pool list, rather than vanishing entirely the way a plain removal does. Basic lands
+  // skip pooling same as everywhere else (toggleCardPool/moveToPool) — they're not meaningfully
+  // "owned" in a way the pool list is for.
+  async function moveDeckCardToPool(card: ScryfallCard): Promise<void> {
+    if (!storedDeck || isBasicLand(card)) return
+    const idx = storedDeck.cardIds.indexOf(card.id)
+    if (idx === -1) return
+    const newIds = [...storedDeck.cardIds.slice(0, idx), ...storedDeck.cardIds.slice(idx + 1)]
+    const stillInDeck = newIds.includes(card.id)
+    await persist({
+      cardIds: newIds,
+      cardPoolIds: addIdToList(storedDeck.cardPoolIds, card.id),
+      consideringIds: stillInDeck ? storedDeck.consideringIds : storedDeck.consideringIds.filter((cid) => cid !== card.id)
+    })
   }
 
   async function handlePrintingChange(oldId: string, newCard: ScryfallCard): Promise<void> {
@@ -1008,9 +1243,78 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     await persist({ tokenPrintingOverrides: next })
   }
 
-  function openTagSearch(tag: string): void {
-    setActiveSearchTags([tag])
+  function openTagSearch(tag?: string): void {
+    setActiveSearchTags(tag ? [tag] : [])
     setView('tagSearch')
+  }
+
+  function openTypeSearch(term?: string): void {
+    setViewingCard(null)
+    setActiveSearchTerms(term ? [term] : [])
+    setView('typeSearch')
+  }
+
+  // Shared between the inline top-10 row and the "Show More" popup's full list — same chip,
+  // same right-click-free dropdown menu (search / filter this deck), just rendered in two
+  // different places. `fromModal` also closes the popup itself whenever one of the menu actions
+  // is chosen, so picking e.g. "Search more cards" from inside it doesn't leave the modal
+  // sitting open behind the view it just navigated away to.
+  function renderTagChip(tag: string, count: number, maxCount: number, fromModal: boolean) {
+    // Most-used tags read as vivid/accent-colored; less-represented tags fade toward the
+    // neutral chip look, so the eye lands on the deck's dominant themes first.
+    const pct = Math.round(15 + (count / maxCount) * 85)
+    function closeMenus(): void {
+      setOpenTagMenu(null)
+      if (fromModal) setTagsModalOpen(false)
+    }
+    return (
+      <div key={tag} className="tag-menu-wrapper">
+        <button
+          className="tag-chip"
+          style={{
+            background: `color-mix(in srgb, var(--accent) ${pct}%, var(--panel))`,
+            borderColor: `color-mix(in srgb, var(--accent) ${pct}%, var(--border))`,
+            color: pct >= 60 ? '#fff' : 'var(--muted)'
+          }}
+          onClick={(e) => {
+            if (openTagMenu?.tag === tag) {
+              setOpenTagMenu(null)
+              return
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            setOpenTagMenu({ tag, x: rect.left, y: rect.bottom + 4 })
+          }}
+          title={`${count} card(s) in this deck`}
+        >
+          {tag} <span className="tag-chip__weight">{count}</span>
+        </button>
+        {openTagMenu?.tag === tag &&
+          createPortal(
+            <>
+              <div className="tag-menu-backdrop" onClick={() => setOpenTagMenu(null)} />
+              <div className="tag-menu" style={{ top: openTagMenu.y, left: openTagMenu.x }}>
+                <button
+                  onClick={() => {
+                    closeMenus()
+                    openTagSearch(tag)
+                  }}
+                >
+                  Search more cards
+                </button>
+                <button
+                  onClick={() => {
+                    closeMenus()
+                    setDeckTagFilter(tag)
+                  }}
+                >
+                  See cards in this deck
+                </button>
+              </div>
+            </>,
+            document.body
+          )}
+      </div>
+    )
   }
 
   // A true swap — the dragged card takes the target's exact spot and vice versa, rather than
@@ -1026,6 +1330,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     const toIdx = ids.indexOf(targetCardId)
     if (fromIdx === -1 || toIdx === -1) return
     ;[ids[fromIdx], ids[toIdx]] = [ids[toIdx], ids[fromIdx]]
+    playSwapSound()
     await persist({ cardIds: ids })
   }
 
@@ -1062,6 +1367,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   // of combining with it.
   async function performHotSwap(outgoing: ScryfallCard, incoming: ScryfallCard): Promise<void> {
     if (!storedDeck) return
+    playSwapSound()
     const idx = storedDeck.cardIds.indexOf(outgoing.id)
     const withoutOutgoing =
       idx === -1 ? storedDeck.cardIds : [...storedDeck.cardIds.slice(0, idx), ...storedDeck.cardIds.slice(idx + 1)]
@@ -1182,6 +1488,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     )
   }
 
+  if (view === 'goldfish') {
+    return <PlaytestGoldfishView storedDeck={storedDeck} cardDataById={cardsById} onBack={() => setView('deck')} />
+  }
+
   if (view === 'tagSearch') {
     return (
       <TagSearchView
@@ -1197,8 +1507,23 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     )
   }
 
+  if (view === 'typeSearch') {
+    return (
+      <TypeSearchView
+        initialTerms={activeSearchTerms}
+        onBack={() => setView('deck')}
+        onSelectCard={handleToggleCard}
+        onAddToPool={toggleCardPool}
+        onAddToWant={toggleWant}
+        getMarker={getMarker}
+        deckOracleIds={deckOracleIds}
+        colorIdentity={deckColorIdentity}
+      />
+    )
+  }
+
   return (
-    <div className="app__results">
+    <div className="app__results" ref={pageTopRef}>
       <div className="app__results-toolbar">
         <button className="back-link back-link--nav" onClick={onBack}>
           ← My Decks
@@ -1360,10 +1685,35 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
 
         <div className="deck-builder__header-block">
-          <h3 className="section-heading">Import</h3>
-          <button className="secondary-button" onClick={() => setImportModalOpen(true)}>
-            Import Deck
-          </button>
+          <h3 className="section-heading">Import / Export</h3>
+          <div className="deck-builder__import-export-row">
+            <button className="secondary-button" onClick={() => setImportModalOpen(true)}>
+              Import Deck
+            </button>
+            <button className="secondary-button" onClick={handleExportDeck}>
+              Export Deck
+            </button>
+          </div>
+        </div>
+
+        <div className="deck-builder__header-block">
+          <h3 className="section-heading">Logic</h3>
+          {storedDeck.logicFile ? (
+            <div className="deck-builder__import-export-row">
+              <button className="secondary-button" onClick={() => setLogicModalOpen(true)}>
+                Replace
+              </button>
+              <button className="secondary-button" onClick={handleRemoveLogic}>
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="deck-builder__import-export-row">
+              <button className="secondary-button" onClick={() => setLogicModalOpen(true)}>
+                Import Logic
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="deck-builder__header-block">
@@ -1403,7 +1753,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             </div>
             {deckWinRate !== null && (
               <div className="record-winrate" style={{ color: winRateColor(deckWinRate) }}>
-                {Math.round(deckWinRate * 100)}% win rate
+                {Math.round(deckWinRate * 100)}%
               </div>
             )}
           </div>
@@ -1456,79 +1806,36 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
       </p>
       {deckCardTagCounts.length === 0 && <p className="app__hint">No tags detected yet — add some cards.</p>}
       <div className="tag-row">
-        {(showAllTags ? deckCardTagCounts : deckCardTagCounts.slice(0, 10)).map(({ tag, count }) => {
-          const maxCount = deckCardTagCounts[0]?.count ?? 1
-          // Most-used tags read as vivid/accent-colored; less-represented tags fade toward
-          // the neutral chip look, so the eye lands on the deck's dominant themes first.
-          const pct = Math.round(15 + (count / maxCount) * 85)
-          const isCoreMechanic = storedDeck.coreMechanicTags.includes(tag)
-          const coreMechanicCapped = !isCoreMechanic && storedDeck.coreMechanicTags.length >= MAX_CORE_MECHANICS
-          return (
-            <div key={tag} className="tag-menu-wrapper">
-              <button
-                className={`tag-chip ${isCoreMechanic ? 'is-core-mechanic' : ''}`}
-                style={{
-                  background: `color-mix(in srgb, var(--accent) ${pct}%, var(--panel))`,
-                  borderColor: `color-mix(in srgb, var(--accent) ${pct}%, var(--border))`,
-                  color: pct >= 60 ? '#fff' : 'var(--muted)'
-                }}
-                onClick={(e) => {
-                  if (openTagMenu?.tag === tag) {
-                    setOpenTagMenu(null)
-                    return
-                  }
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  setOpenTagMenu({ tag, x: rect.left, y: rect.bottom + 4 })
-                }}
-                title={`${count} card(s) in this deck${isCoreMechanic ? ' — Core Mechanic' : ''}`}
-              >
-                {isCoreMechanic && <span className="tag-chip__star">★</span>}
-                {tag} <span className="tag-chip__weight">{count}</span>
-              </button>
-              {openTagMenu?.tag === tag &&
-                createPortal(
-                  <>
-                    <div className="tag-menu-backdrop" onClick={() => setOpenTagMenu(null)} />
-                    <div className="tag-menu" style={{ top: openTagMenu.y, left: openTagMenu.x }}>
-                      <button
-                        onClick={() => {
-                          setOpenTagMenu(null)
-                          openTagSearch(tag)
-                        }}
-                      >
-                        Search more cards
-                      </button>
-                      <button
-                        onClick={() => {
-                          setOpenTagMenu(null)
-                          setDeckTagFilter(tag)
-                        }}
-                      >
-                        See cards in this deck
-                      </button>
-                      <button
-                        disabled={coreMechanicCapped}
-                        title={coreMechanicCapped ? `You can only pick ${MAX_CORE_MECHANICS} core mechanics` : undefined}
-                        onClick={() => {
-                          setOpenTagMenu(null)
-                          toggleCoreMechanic(tag)
-                        }}
-                      >
-                        {isCoreMechanic ? 'Remove Core Mechanic' : 'Mark as Core Mechanic'}
-                      </button>
-                    </div>
-                  </>,
-                  document.body
-                )}
-            </div>
-          )
-        })}
-        {!showAllTags && deckCardTagCounts.length > 10 && (
-          <button className="tag-chip tag-chip--edit" onClick={() => setShowAllTags(true)}>
+        {deckCardTagCounts.slice(0, 10).map(({ tag, count }) => renderTagChip(tag, count, deckCardTagCounts[0]?.count ?? 1, false))}
+        {deckCardTagCounts.length > 10 && (
+          <button className="tag-chip tag-chip--edit" onClick={() => setTagsModalOpen(true)}>
             Show More ({deckCardTagCounts.length - 10})
           </button>
         )}
       </div>
+
+      {tagsModalOpen &&
+        createPortal(
+          // Portaled to document.body — .deck-builder__mid-section's own art-background layer
+          // establishes a stacking/containing-block context that trapped this modal's
+          // position:fixed, rendering it inline right after the tag row instead of as a real
+          // full-screen overlay (same class of bug the tag-menu dropdown below already portals
+          // around).
+          <div className="card-detail-overlay" onClick={() => setTagsModalOpen(false)}>
+            <div className="playtest-analysis-modal" onClick={(e) => e.stopPropagation()}>
+              <button className="card-detail__close" onClick={() => setTagsModalOpen(false)}>
+                ×
+              </button>
+              <h3 className="section-heading" style={{ marginTop: 0 }}>
+                All Card Tags ({deckCardTagCounts.length})
+              </h3>
+              <div className="tag-row">
+                {deckCardTagCounts.map(({ tag, count }) => renderTagChip(tag, count, deckCardTagCounts[0]?.count ?? 1, true))}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {deckTagFilter && (
         <div className="deck-tag-filter">
@@ -1581,9 +1888,27 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             </div>
           )
         })}
+
+        <div className="deck-builder__archetype-picker">
+          <label htmlFor="deck-archetype">Archetype</label>
+          <select
+            id="deck-archetype"
+            value={storedDeck?.archetypeKey ?? 'auto'}
+            onChange={(e) => persist({ archetypeKey: e.target.value })}
+          >
+            <option value="auto">Auto (best EDHREC match)</option>
+            <option value="none">None (baseline targets)</option>
+            {ARCHETYPE_OPTIONS.map((a) => (
+              <option key={a.key} value={a.key}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <h3 className="section-heading">Add Cards</h3>
+      <div className="deck-builder__add-cards-row">
       <div className="add-cards-search">
         <input
           ref={addCardsInputRef}
@@ -1641,6 +1966,13 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           </div>
         )}
       </div>
+      <button className="secondary-button" onClick={() => openTagSearch()}>
+        Search by Tag
+      </button>
+      <button className="secondary-button" onClick={() => openTypeSearch()}>
+        Search by Type
+      </button>
+      </div>
       {trimmedSearch && (
         <CardResults
           query={searchQueryFull}
@@ -1661,12 +1993,24 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
       </div>
 
       <div className="deck-builder__deck-heading-row">
-        <h3 className="section-heading" ref={deckSidebar.topRef}>
+        <h3 className="section-heading">
           Deck ({totalDeckSize} card{totalDeckSize === 1 ? '' : 's'})
         </h3>
-        <button className="secondary-button" onClick={() => setHotSwapOpen(true)} disabled={deckCards.length === 0}>
-          🔄 Hot Swap
-        </button>
+        <div className="deck-builder__deck-heading-actions">
+          <button
+            className="secondary-button"
+            onClick={(e) => setGroupMenuAnchor({ for: 'deck', x: e.clientX, y: e.clientY })}
+            disabled={deckCards.length === 0}
+          >
+            Group By: {DECK_GROUP_MODE_LABELS[deckGroupMode]} ▾
+          </button>
+          <button className="secondary-button" onClick={() => setView('goldfish')} disabled={deckCards.length === 0}>
+            🎲 Playtest
+          </button>
+          <button className="secondary-button" onClick={() => setHotSwapOpen(true)} disabled={deckCards.length === 0}>
+            🔄 Hot Swap
+          </button>
+        </div>
       </div>
       {deckCards.length === 0 && <p className="app__hint">No cards added yet.</p>}
       {deckCards.length > 0 && (
@@ -1675,23 +2019,20 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             <button className="commander-view__toc-top" onClick={deckSidebar.scrollToTop}>
               ↑ Back to Top
             </button>
-            {categoryGroups.map(({ category, cards }) => (
+            {categoryGroups.map(({ category, label, dashColor, cards }) => (
               <button
                 key={category}
                 className="commander-view__toc-item"
                 onClick={() => deckSidebar.scrollToSection(category)}
               >
-                <span
-                  className="commander-view__section-dash"
-                  style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                />
-                {DECK_CATEGORY_LABELS[category] ?? category} ({cards.length})
+                <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                {label} ({cards.length})
               </button>
             ))}
           </nav>
 
           <div className="commander-view__sections">
-            {categoryGroups.map(({ category, cards }) => {
+            {categoryGroups.map(({ category, label, dashColor, cards }) => {
               const isCollapsed = deckSidebar.collapsed.has(category)
               return (
                 <section
@@ -1705,11 +2046,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                     className={`commander-view__section-heading commander-view__section-heading--toggle ${isCollapsed ? 'is-collapsed' : ''}`}
                     onClick={() => deckSidebar.toggleCollapsed(category)}
                   >
-                    <span
-                      className="commander-view__section-dash"
-                      style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                    />
-                    {DECK_CATEGORY_LABELS[category] ?? category}
+                    <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                    {label}
                     {` (${cards.length})`}
                     <span className="commander-view__section-chevron">▾</span>
                   </button>
@@ -1722,6 +2060,32 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                         // storedDeck.cardIds.
                         const occurrence = cards.slice(0, index).filter((other) => other.id === card.id).length
                         const slotKey = `${card.id}-${index}`
+                        // Group By Subtype shows a multi-subtype card (Hydroid Krasis: Hydra
+                        // Jellyfish) in every one of its subtype sections, not just its primary
+                        // one — see groupCardsBySubtype/primarySubtype in deckLogic.ts. A
+                        // secondary ("ghost") appearance is view-only: no drag-to-reorder (it
+                        // isn't really "this section's" card to reorder), just click-to-inspect.
+                        const isGhost = deckGroupMode === 'subtype' && primarySubtype(card) !== category
+                        if (isGhost) {
+                          return (
+                            <div key={slotKey} className="deck-card-slot">
+                              <CardTile
+                                card={card}
+                                onSelect={(c) => {
+                                  setViewingKind('card')
+                                  setViewingSlotId(c.id)
+                                  setViewingSlotOccurrence(occurrence)
+                                  setViewingCard(c)
+                                }}
+                                onContextMenu={handleDeckCardContextMenu}
+                                isFoil={foilIdSet.has(foilKeyFor(card.id, occurrence))}
+                                illegalReason={getIllegalReason(card, deckColorIdentity)}
+                                isConsidering={consideringIdSet.has(card.id)}
+                                isGhost
+                              />
+                            </div>
+                          )
+                        }
                         return (
                           <div
                             key={slotKey}
@@ -1753,8 +2117,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                                 setViewingSlotOccurrence(occurrence)
                                 setViewingCard(c)
                               }}
+                              onContextMenu={handleDeckCardContextMenu}
                               isFoil={foilIdSet.has(foilKeyFor(card.id, occurrence))}
                               illegalReason={getIllegalReason(card, deckColorIdentity)}
+                              isConsidering={consideringIdSet.has(card.id)}
                             />
                           </div>
                         )
@@ -1779,7 +2145,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                 title={`${token.type_line} — click to change printing`}
                 onClick={() => handleViewToken(token)}
               >
-                <img src={scryfallImageUrl(token.id)} alt={token.name} loading="lazy" />
+                <img src={scryfallImageUrl(token.id)} alt={token.name} loading="lazy" decoding="async" />
                 <span>{token.name}</span>
               </button>
             ))}
@@ -1815,9 +2181,18 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               rawText={cardPoolQuery.trim()}
             />
           )}
-          <h3 className="section-heading" ref={poolSidebar.topRef}>
-            In Your Pool ({cardPoolCards.length})
-          </h3>
+          <div className="deck-builder__deck-heading-row">
+            <h3 className="section-heading">In Your Pool ({cardPoolCards.length})</h3>
+            <div className="deck-builder__deck-heading-actions">
+              <button
+                className="secondary-button"
+                onClick={(e) => setGroupMenuAnchor({ for: 'cardPool', x: e.clientX, y: e.clientY })}
+                disabled={cardPoolCards.length === 0}
+              >
+                Group By: {DECK_GROUP_MODE_LABELS[poolGroupMode]} ▾
+              </button>
+            </div>
+          </div>
           <p className="app__hint">Click a card to inspect it or change printing — right-click for more options.</p>
           {cardPoolCards.length === 0 && <p className="app__hint">No cards marked as owned yet.</p>}
           {cardPoolCards.length > 0 && (
@@ -1826,23 +2201,20 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                 <button className="commander-view__toc-top" onClick={poolSidebar.scrollToTop}>
                   ↑ Back to Top
                 </button>
-                {poolCategoryGroups.map(({ category, cards }) => (
+                {poolCategoryGroups.map(({ category, label, dashColor, cards }) => (
                   <button
                     key={category}
                     className="commander-view__toc-item"
                     onClick={() => poolSidebar.scrollToSection(category)}
                   >
-                    <span
-                      className="commander-view__section-dash"
-                      style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                    />
-                    {DECK_CATEGORY_LABELS[category] ?? category} ({cards.length})
+                    <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                    {label} ({cards.length})
                   </button>
                 ))}
               </nav>
 
               <div className="commander-view__sections">
-                {poolCategoryGroups.map(({ category, cards }) => {
+                {poolCategoryGroups.map(({ category, label, dashColor, cards }) => {
                   const isCollapsed = poolSidebar.collapsed.has(category)
                   return (
                     <section
@@ -1856,11 +2228,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                         className={`commander-view__section-heading commander-view__section-heading--toggle ${isCollapsed ? 'is-collapsed' : ''}`}
                         onClick={() => poolSidebar.toggleCollapsed(category)}
                       >
-                        <span
-                          className="commander-view__section-dash"
-                          style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                        />
-                        {DECK_CATEGORY_LABELS[category] ?? category}
+                        <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                        {label}
                         {` (${cards.length})`}
                         <span className="commander-view__section-chevron">▾</span>
                       </button>
@@ -1918,9 +2287,18 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               rawText={wantQuery.trim()}
             />
           )}
-          <h3 className="section-heading" ref={wantSidebar.topRef}>
-            Wanted ({wantCards.length})
-          </h3>
+          <div className="deck-builder__deck-heading-row">
+            <h3 className="section-heading">Wanted ({wantCards.length})</h3>
+            <div className="deck-builder__deck-heading-actions">
+              <button
+                className="secondary-button"
+                onClick={(e) => setGroupMenuAnchor({ for: 'want', x: e.clientX, y: e.clientY })}
+                disabled={wantCards.length === 0}
+              >
+                Group By: {DECK_GROUP_MODE_LABELS[wantGroupMode]} ▾
+              </button>
+            </div>
+          </div>
           <p className="app__hint">Click a card to inspect it or change printing — right-click for more options.</p>
           {wantCards.length === 0 && <p className="app__hint">Nothing on the want list yet.</p>}
           {wantCards.length > 0 && (
@@ -1929,23 +2307,20 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                 <button className="commander-view__toc-top" onClick={wantSidebar.scrollToTop}>
                   ↑ Back to Top
                 </button>
-                {wantCategoryGroups.map(({ category, cards }) => (
+                {wantCategoryGroups.map(({ category, label, dashColor, cards }) => (
                   <button
                     key={category}
                     className="commander-view__toc-item"
                     onClick={() => wantSidebar.scrollToSection(category)}
                   >
-                    <span
-                      className="commander-view__section-dash"
-                      style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                    />
-                    {DECK_CATEGORY_LABELS[category] ?? category} ({cards.length})
+                    <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                    {label} ({cards.length})
                   </button>
                 ))}
               </nav>
 
               <div className="commander-view__sections">
-                {wantCategoryGroups.map(({ category, cards }) => {
+                {wantCategoryGroups.map(({ category, label, dashColor, cards }) => {
                   const isCollapsed = wantSidebar.collapsed.has(category)
                   return (
                     <section
@@ -1959,11 +2334,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                         className={`commander-view__section-heading commander-view__section-heading--toggle ${isCollapsed ? 'is-collapsed' : ''}`}
                         onClick={() => wantSidebar.toggleCollapsed(category)}
                       >
-                        <span
-                          className="commander-view__section-dash"
-                          style={{ background: DECK_CATEGORY_DASH_COLORS[category] }}
-                        />
-                        {DECK_CATEGORY_LABELS[category] ?? category}
+                        <span className="commander-view__section-dash" style={{ background: dashColor }} />
+                        {label}
                         {` (${cards.length})`}
                         <span className="commander-view__section-chevron">▾</span>
                       </button>
@@ -2003,9 +2375,12 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           commanderCount={1 + (storedDeck?.partnerCommanderId ? 1 : 0)}
           commander={commander}
           cardTagOverrides={cardTagOverrides}
+          taggerDataByOracleId={taggerDataByOracleId}
+          userCardTags={storedDeck?.userCardTags}
           onAddToDeck={handleToggleCard}
           onAddToPool={toggleCardPool}
           onAddToWant={toggleWant}
+          onTypeSearch={openTypeSearch}
         />
       )}
 
@@ -2019,7 +2394,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           synergyWeights={synergyWeights}
           synergyLoading={synergyLoading}
           commanderTags={commanderTagIndex?.tags.map((t) => ({ slug: t.slug, count: t.count })) ?? []}
+          commanderNames={[commander?.name, partnerCommander?.name].filter((n): n is string => Boolean(n))}
           cardTagOverrides={cardTagOverrides}
+          taggerDataByOracleId={taggerDataByOracleId}
+          userCardTags={storedDeck?.userCardTags}
+          archetypeKey={storedDeck?.archetypeKey ?? 'auto'}
           onScoreComputed={(overall, grade) =>
             persist({ lastScore: { overall, grade, recordedAt: new Date().toISOString() } })
           }
@@ -2033,6 +2412,27 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         />
       )}
 
+      {groupMenuAnchor && (
+        <CardContextMenu
+          x={groupMenuAnchor.x}
+          y={groupMenuAnchor.y}
+          onClose={() => setGroupMenuAnchor(null)}
+          actions={(Object.entries(DECK_GROUP_MODE_LABELS) as [DeckGroupMode, string][]).map(([mode, label]) => ({
+            label,
+            onSelect: () => {
+              const setMode =
+                groupMenuAnchor.for === 'deck'
+                  ? setDeckGroupMode
+                  : groupMenuAnchor.for === 'cardPool'
+                    ? setPoolGroupMode
+                    : setWantGroupMode
+              setMode(mode)
+              setGroupMenuAnchor(null)
+            }
+          }))}
+        />
+      )}
+
       {viewingCard && viewingKind === 'token' && (
         <CardDetail
           card={viewingCard}
@@ -2040,8 +2440,15 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             setViewingCard(null)
             setViewingTokenName(null)
           }}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            setViewingTokenName(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
-            onPrintingChange: (newCard) => handleTokenPrintingChange(newCard)
+            onPrintingChange: (newCard) => handleTokenPrintingChange(newCard),
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2050,12 +2457,18 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         <CardDetail
           card={viewingCard}
           onClose={() => setViewingCard(null)}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
             onPrintingChange: (newCard) => handleCommanderPrintingChange(newCard),
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
-            }
+            },
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2064,12 +2477,18 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         <CardDetail
           card={viewingCard}
           onClose={() => setViewingCard(null)}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
             onPrintingChange: (newCard) => handlePartnerPrintingChange(newCard),
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
-            }
+            },
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2078,6 +2497,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         <CardDetail
           card={viewingCard}
           onClose={() => setViewingCard(null)}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
             onRemove: () => {
               if (viewingSlotId) handleRemoveId(viewingSlotId)
@@ -2088,7 +2512,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             isFoil: viewingSlotId ? foilIdSet.has(foilKeyFor(viewingSlotId, viewingSlotOccurrence)) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(foilKeyFor(viewingSlotId, viewingSlotOccurrence))
-            }
+            },
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2097,6 +2522,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         <CardDetail
           card={viewingCard}
           onClose={() => setViewingCard(null)}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
             onRemove: () => {
               if (viewingSlotId) toggleCardPool({ ...viewingCard, id: viewingSlotId })
@@ -2108,7 +2538,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
-            }
+            },
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2117,6 +2548,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         <CardDetail
           card={viewingCard}
           onClose={() => setViewingCard(null)}
+          onTypeClick={openTypeSearch}
+          onTagClick={(tag) => {
+            setViewingCard(null)
+            openTagSearch(tag)
+          }}
           deckMode={{
             onRemove: () => {
               if (viewingSlotId) toggleWant({ ...viewingCard, id: viewingSlotId })
@@ -2128,7 +2564,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
-            }
+            },
+            ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2195,6 +2632,77 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
       )}
 
+      {exportModalOpen && (
+        <div className="card-detail-overlay" onClick={() => setExportModalOpen(false)}>
+          <div className="export-deck-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="card-detail__close" onClick={() => setExportModalOpen(false)}>
+              ×
+            </button>
+            <h3 className="section-heading" style={{ marginTop: 0 }}>
+              Export — {storedDeck?.name}
+            </h3>
+            <p className="app__hint">Edit if needed, then copy and paste into another site's import box.</p>
+            <textarea
+              className="export-deck-modal__textarea"
+              value={exportText}
+              onChange={(e) => setExportText(e.target.value)}
+              spellCheck={false}
+            />
+            <div className="export-deck-modal__actions">
+              <button className="secondary-button" onClick={() => setExportModalOpen(false)}>
+                Close
+              </button>
+              <button className="primary-button" onClick={copyExportText}>
+                {exportCopied ? '✓ Copied!' : 'Copy Text'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {logicModalOpen && (
+        <div className="card-detail-overlay" onClick={closeLogicModal}>
+          <div className="export-deck-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="card-detail__close" onClick={closeLogicModal}>
+              ×
+            </button>
+            <h3 className="section-heading" style={{ marginTop: 0 }}>
+              Import Logic
+            </h3>
+            <p className="app__hint">
+              Paste a Logic file — deck-specific strategic guidance for the Playtest bot AI, written outside the app
+              (see docs/logic-file-guide.md for the format and how to generate one for this deck).
+            </p>
+            <textarea
+              className="export-deck-modal__textarea"
+              value={logicText}
+              onChange={(e) => setLogicText(e.target.value)}
+              placeholder={'{\n  "biblioplexLogicFile": true,\n  "version": 1,\n  "rules": [...]\n}'}
+              spellCheck={false}
+            />
+            {logicError && <p className="import-deck-modal__warning">⚠ {logicError}</p>}
+            {logicWarnings.map((w) => (
+              <p className="import-deck-modal__warning" key={w}>
+                ⚠ {w}
+              </p>
+            ))}
+            {logicImportedCount !== null && (
+              <p className="app__hint">
+                Saved {logicImportedCount} rule{logicImportedCount === 1 ? '' : 's'}.
+              </p>
+            )}
+            <div className="export-deck-modal__actions">
+              <button className="secondary-button" onClick={closeLogicModal}>
+                Close
+              </button>
+              <button className="primary-button" onClick={handleImportLogic} disabled={logicImporting || !logicText.trim()}>
+                {logicImporting ? 'Importing…' : 'Confirm Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {poolWantContextMenu && (
         <CardContextMenu
           x={poolWantContextMenu.x}
@@ -2242,6 +2750,43 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         />
       )}
 
+      {deckCardContextMenu && (
+        <CardContextMenu
+          x={deckCardContextMenu.x}
+          y={deckCardContextMenu.y}
+          onClose={() => setDeckCardContextMenu(null)}
+          actions={[
+            {
+              label: consideringIdSet.has(deckCardContextMenu.card.id)
+                ? 'Unmark as Considering'
+                : 'Mark as Considering',
+              onSelect: () => {
+                toggleConsidering(deckCardContextMenu.card.id)
+                setDeckCardContextMenu(null)
+              }
+            },
+            ...(isBasicLand(deckCardContextMenu.card)
+              ? []
+              : [
+                  {
+                    label: 'Move to Pool',
+                    onSelect: () => {
+                      moveDeckCardToPool(deckCardContextMenu.card)
+                      setDeckCardContextMenu(null)
+                    }
+                  }
+                ]),
+            {
+              label: 'Remove from Deck',
+              onSelect: () => {
+                handleRemoveId(deckCardContextMenu.card.id)
+                setDeckCardContextMenu(null)
+              }
+            }
+          ]}
+        />
+      )}
+
       {hotSwapOpen && (
         <div className="hot-swap-overlay" onClick={() => setHotSwapOpen(false)}>
           <div className="hot-swap-modal" onClick={(e) => e.stopPropagation()}>
@@ -2267,8 +2812,9 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                   <span className="hot-swap-column__label">Deck</span>
                   <select
                     value={hotSwapDeckCategory}
-                    onChange={(e) => setHotSwapDeckCategory(e.target.value as CardCategory)}
+                    onChange={(e) => setHotSwapDeckCategory(e.target.value as CardCategory | 'Considering')}
                   >
+                    <option value="Considering">Considering</option>
                     {ALL_CATEGORIES.map((cat) => (
                       <option key={cat} value={cat}>
                         {DECK_CATEGORY_LABELS[cat] ?? cat}
@@ -2278,8 +2824,9 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                 </div>
                 {hotSwapDeckCards.length === 0 && (
                   <p className="app__hint">
-                    No {(DECK_CATEGORY_LABELS[hotSwapDeckCategory] ?? hotSwapDeckCategory).toLowerCase()} in the
-                    deck.
+                    {hotSwapDeckCategory === 'Considering'
+                      ? 'No cards marked as Considering yet — right-click a card in the deck to flag it.'
+                      : `No ${(DECK_CATEGORY_LABELS[hotSwapDeckCategory] ?? hotSwapDeckCategory).toLowerCase()} in the deck.`}
                   </p>
                 )}
                 <div className="card-grid card-grid--hotswap">
@@ -2316,6 +2863,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                           setViewingSlotId(c.id)
                           setViewingCard(c)
                         }}
+                        isConsidering={consideringIdSet.has(card.id)}
                       />
                     </div>
                   ))}

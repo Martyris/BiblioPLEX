@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.biblioplex</groupId>
+  <artifactId>java-bridge</artifactId>
+  <version>1.0</version>
+  <build>
+    <finalName>java-bridge-1.0-jar-with-dependencies</finalName>
+    <plugins>
+      <plugin>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <transformers>
+            <transformer>
+              <mainClass>com.biblioplex.bridge.Main</mainClass>
+            </transformer>
+          </transformers>
+          <filters>
+            <filter>
+              <artifact>org.mage:mage-player-ai</artifact>
+              <excludes>
+                <exclude>mage/player/ai/score/GameStateEvaluator2.class</exclude>
+                <exclude>mage/player/ai/score/GameStateEvaluator2$PlayerEvaluateScore.class</exclude>
+                <exclude>mage/player/ai/PossibleTargetsComparator.class</exclude>
+              </excludes>
+            </filter>
+          </filters>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.source>8</maven.compiler.source>
+    <maven.compiler.target>8</maven.compiler.target>
+  </properties>
+</project>

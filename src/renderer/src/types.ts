@@ -199,6 +199,22 @@ export interface DeckTag {
 
 export type Bracket = 1 | 2 | 3 | 4 | 5
 
+// A "Logic file" encodes deck-specific strategic guidance for the Playtest bot AI — authored
+// externally (deck owner + their own Claude access + docs/logic-file-guide.md), pasted into
+// Deck Builder's Import Logic modal, and read-only from the app's side. v1 supports exactly one
+// rule type, matching the one real hook BiblioComputerPlayer7.java has for this — see that file
+// and docs/logic-file-guide.md.
+export interface LogicRule {
+  type: 'holdInstantUntilAttackTrigger'
+  permanentNames: string[]
+  note?: string
+}
+
+export interface DeckLogicFile {
+  version: number
+  rules: LogicRule[]
+}
+
 export interface StoredDeck {
   id: string
   name: string
@@ -226,11 +242,24 @@ export interface StoredDeck {
   // foil/nonfoil as finishes of the same printing id, not separate objects, so this has to be
   // our own tracked state rather than something derivable from the card data.
   foilIds: string[]
+  // Cards flagged from the deck grid's right-click menu as "on the chopping block" while still
+  // deciding whether to cut them — a review aid only; removing a card from the deck is still a
+  // separate, deliberate action.
+  consideringIds: string[]
   // Snapshot of the Score tab's result, written whenever it's computed there — shown on the
   // decks list so a score is visible without opening every deck. Not live; only as fresh as
   // the last time someone looked at that deck's Score tab.
   lastScore: { overall: number; grade: string; recordedAt: string } | null
-  // Up to 3 tags (from the auto-detected Card Tags list) the player has singled out as this
-  // deck's defining mechanics — shown on the "My Decks" tile. Capped at 3 in the UI, not here.
-  coreMechanicTags: string[]
+  // The deck's chosen archetype (see ARCHETYPE_OPTIONS in deckScore.ts) — 'auto' (default) picks
+  // the commander's best EDHREC match, 'none' disables archetype-specific scoring targets. Set
+  // from the picker on the main editor screen (next to Basic Lands); feeds the Score tab's
+  // targets directly and is shown on the "My Decks" tile in place of the old Core Mechanics tags.
+  archetypeKey: string
+  logicFile: DeckLogicFile | null
+  // Tags a user has added to a specific card WITHIN this deck only (same card in a different
+  // deck is unaffected) — e.g. a card that functions as removal in one deck but ramp in
+  // another. Keyed by oracle id, purely additive: there's no per-deck "removed" list, since a
+  // user can only ever remove a tag they added here, never one of the card's own official
+  // (Scryfall Tagger or regex-fallback) tags — see resolveCardTags in cardTagging.ts.
+  userCardTags?: Record<string, string[]>
 }

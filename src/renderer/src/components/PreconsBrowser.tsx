@@ -36,6 +36,13 @@ interface Props {
 
 const SIMPLIFIED_VIEW_KEY = 'mtgplatform.preconsSimplifiedView'
 
+// Precon commander/partner card data (color pips + cover art) — module-level so it survives
+// switching away from and back to this tab within the same app session, instead of re-fetching
+// the exact same ~160-precon-library's worth of Scryfall data (via the rate-limited /cards/
+// collection endpoint) on every single mount. The precon library itself only changes via an
+// explicit "Build"/"Check for New Precons" action, so this never goes stale mid-session.
+const preconCommanderCache = new Map<string, ScryfallCard>()
+
 const PHASE_LABELS: Record<PreconBuildProgress['phase'], string> = {
   idle: 'Starting…',
   catalog: 'Fetching the precon catalog…',
@@ -46,7 +53,9 @@ const PHASE_LABELS: Record<PreconBuildProgress['phase'], string> = {
 
 export default function PreconsBrowser({ onOpenPrecon }: Props) {
   const [precons, setPrecons] = useState<PreconDeck[]>([])
-  const [commanders, setCommanders] = useState<Record<string, ScryfallCard>>({})
+  // Seeded from whatever's already cached (e.g. from an earlier visit this session) so a repeat
+  // visit paints with pips/art immediately, not just after refresh()'s fetch resolves.
+  const [commanders, setCommanders] = useState<Record<string, ScryfallCard>>(() => Object.fromEntries(preconCommanderCache))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<PreconStatus | null>(null)
@@ -94,13 +103,17 @@ export default function PreconsBrowser({ onOpenPrecon }: Props) {
       const commanderIds = [
         ...new Set(sorted.flatMap((d) => [d.commanderId, d.partnerCommanderId].filter((id): id is string => Boolean(id))))
       ]
-      if (commanderIds.length > 0) {
-        const cardsResult = await window.api.getCardsByIds(commanderIds)
+      // Only fetch what a previous visit this session didn't already resolve — see
+      // preconCommanderCache's own comment for why this is safe to trust across mounts.
+      const uncachedIds = commanderIds.filter((id) => !preconCommanderCache.has(id))
+      if (uncachedIds.length > 0) {
+        const cardsResult = await window.api.getCardsByIds(uncachedIds)
         if (!isError(cardsResult)) {
           const cards = (cardsResult as { data: ScryfallCard[] }).data ?? []
-          setCommanders(Object.fromEntries(cards.map((c) => [c.id, c])))
+          for (const card of cards) preconCommanderCache.set(card.id, card)
         }
       }
+      setCommanders(Object.fromEntries(commanderIds.map((id) => [id, preconCommanderCache.get(id)]).filter(([, c]) => c) as [string, ScryfallCard][]))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -412,12 +425,16 @@ export default function PreconsBrowser({ onOpenPrecon }: Props) {
                         className="deck-card__image deck-card__image--behind"
                         src={partner.image_uris.small}
                         alt={partner.name}
+                        loading="lazy"
+                        decoding="async"
                       />
                     )}
                     <img
                       className="deck-card__image deck-card__image--front"
                       src={commander.image_uris.small}
                       alt={precon.commanderName}
+                      loading="lazy"
+                      decoding="async"
                     />
                   </div>
                 )}

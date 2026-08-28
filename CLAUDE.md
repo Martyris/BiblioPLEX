@@ -43,9 +43,6 @@ the Gotchas section below, it directly controls where user data lives on disk.
   `order=edhrec` sort, which ranks differently), and a per-commander tag index
   (`getCommanderTagIndex`) that fetches every one of a commander's ~30 top tag pages to build a
   card→tags map — this is expensive (~15s first run) and cached 6 hours.
-- **LigaMagic** (BRL pricing) — **not implemented**. User wants it as the default price
-  reference eventually; no API exists, would require scraping, deliberately deferred. Currently
-  only Scryfall's USD pricing shows in `CardDetail`.
 - **Gatherer** — not integrated; Scryfall mirrors official rulings so it hasn't been needed.
 
 ## Feature inventory (as of this doc)
@@ -111,7 +108,6 @@ component; keep both in sync if tuning it further.
   researched; see `/backgrounds/<slug>` if picking this back up).
 - No hard deck-legality validation (100-card count, color identity enforcement, banned list).
   Singleton is enforced on add, nothing else is.
-- LigaMagic BRL pricing (see above).
 - The EDHREC tag-index (~15s first load per commander) has no visible progress indicator
   beyond a static "this can take ~15s" hint — could use a real progress state.
 - No card image caching — every printing switch re-hits Scryfall's CDN via plain `<img src>`

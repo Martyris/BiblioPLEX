@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.biblioplex</groupId>
+  <artifactId>java-bridge</artifactId>
+  <version>1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.source>8</maven.compiler.source>
+    <maven.compiler.target>8</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage</artifactId>
+      <version>1.4.61</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-sets</artifactId>
+      <version>1.4.61</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-game-commanderfreeforall</artifactId>
+      <version>1.4.61</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-player-ai-mad</artifactId>
+      <version>1.4.61</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mage</groupId>
+      <artifactId>mage-player-ai</artifactId>
+      <version>1.4.61</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- So the shaded jar lands at exactly target/java-bridge-1.0-jar-with-dependencies.jar,
+         matching what src/main/gameSim.ts (findJavaBridgeJar) already expects — shade-plugin's
+         default behavior overwrites the main artifact in place at target/${finalName}.jar. -->
+    <finalName>java-bridge-1.0-jar-with-dependencies</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <configuration>
+          <transformers>
+            <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+              <mainClass>com.biblioplex.bridge.Main</mainClass>
+            </transformer>
+          </transformers>
+          <!-- This project ships its own fixed replacements for mage-player-ai classes — see
+               each class's own file comment for why (GameStateEvaluator2: multiplayer scoring;
+               PossibleTargetsComparator: "look at top N, pick one" card choices comparing a
+               creature's toughness against a spell's mana value on the same scale). Both this
+               project and the dependency jar contain these exact classes; without this exclude,
+               whichever one shade happens to process last wins ARBITRARILY (confirmed: it was
+               the dependency's original, not ours, with plain assembly-plugin merging) —
+               excluding them from the dependency artifact makes this project's copies the only
+               ones left, deterministically. -->
+          <filters>
+            <filter>
+              <artifact>org.mage:mage-player-ai</artifact>
+              <excludes>
+                <exclude>mage/player/ai/score/GameStateEvaluator2.class</exclude>
+                <exclude>mage/player/ai/score/GameStateEvaluator2$PlayerEvaluateScore.class</exclude>
+                <exclude>mage/player/ai/PossibleTargetsComparator.class</exclude>
+              </excludes>
+            </filter>
+          </filters>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

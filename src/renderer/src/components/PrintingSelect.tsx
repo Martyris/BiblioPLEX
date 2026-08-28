@@ -87,11 +87,22 @@ export default function PrintingSelect({ printings, activeId, onChange }: Props)
                 }}
               >
                 {(p.image_uris?.small ?? p.card_faces?.[0]?.image_uris?.small) && (
-                  <img src={p.image_uris?.small ?? p.card_faces?.[0]?.image_uris?.small} alt={printingLabel(p)} />
+                  <img
+                    src={p.image_uris?.small ?? p.card_faces?.[0]?.image_uris?.small}
+                    alt={printingLabel(p)}
+                    loading="lazy"
+                    decoding="async"
+                  />
                 )}
                 {iconMap[p.set] && (
                   <span className="printing-select__grid-caption">
-                    <img className="printing-select__icon" src={iconMap[p.set]} alt={p.set} />
+                    <img
+                      className="printing-select__icon"
+                      src={iconMap[p.set]}
+                      alt={p.set}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   </span>
                 )}
               </button>

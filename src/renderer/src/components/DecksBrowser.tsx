@@ -8,9 +8,11 @@ import { isError, type ScryfallCard, type StoredDeck } from '../types'
 import { winRate, winRateColor } from '../winRate'
 import { colorIdentityGradient } from '../colorIdentityName'
 import { bracketColor } from '../bracketColor'
-import { scoreColor } from '../deckScore'
+import { ARCHETYPE_OPTIONS, scoreColor } from '../deckScore'
 import { BASE_EXCLUSION_TERMS } from '../queryBuilder'
 import { detectSecondCommanderMode, secondCommanderQuery, type SecondCommanderMode } from '../partnerEligibility'
+import { playSwapSound } from '../clickSound'
+import { t, useLocale } from '../i18n'
 
 interface Props {
   onOpenDeck: (deckId: string) => void
@@ -21,8 +23,13 @@ type CreateStep = 'primary' | 'secondary'
 const SIMPLIFIED_VIEW_KEY = 'mtgplatform.decksSimplifiedView'
 const SCORE_RING_RADIUS = 16
 const SCORE_RING_CIRCUMFERENCE = 2 * Math.PI * SCORE_RING_RADIUS
+// 'auto'/'none' aren't real archetypes the player declared (they're the default/opt-out states),
+// so they're excluded here — only a deliberately-picked archetype shows on the tile, same as the
+// old Core Mechanics badges only appearing once the player had actually picked some.
+const ARCHETYPE_LABEL_BY_KEY = new Map(ARCHETYPE_OPTIONS.map((a) => [a.key, a.label]))
 
 export default function DecksBrowser({ onOpenDeck }: Props) {
+  useLocale()
   const [decks, setDecks] = useState<StoredDeck[]>([])
   const [commanders, setCommanders] = useState<Record<string, ScryfallCard>>({})
   const [loading, setLoading] = useState(true)
@@ -55,7 +62,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
   const [filterColors, setFilterColors] = useState<string[]>([])
   const [filterColorMode, setFilterColorMode] = useState<'atLeast' | 'exactly'>('atLeast')
   const [filterBracket, setFilterBracket] = useState<'any' | 'none' | 1 | 2 | 3 | 4 | 5>('any')
-  const [filterCoreMechanics, setFilterCoreMechanics] = useState<string[]>([])
+  const [filterArchetype, setFilterArchetype] = useState('any')
 
   function toggleSimplified(): void {
     setSimplified((prev) => {
@@ -212,6 +219,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
     const toIdx = ids.indexOf(targetDeckId)
     if (fromIdx === -1 || toIdx === -1) return
     ;[ids[fromIdx], ids[toIdx]] = [ids[toIdx], ids[fromIdx]]
+    playSwapSound()
 
     // Optimistic reorder so the UI responds instantly, then persist.
     const byId = new Map(decks.map((d) => [d.id, d]))
@@ -232,29 +240,19 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
     })
   }, [decks, commanders])
 
-  const allCoreMechanicTags = useMemo(() => {
-    const tags = new Set<string>()
-    for (const deck of decks) for (const tag of deck.coreMechanicTags) tags.add(tag)
-    return [...tags].sort()
-  }, [decks])
-
   const filtersActive =
-    filterName.trim() !== '' || filterColors.length > 0 || filterBracket !== 'any' || filterCoreMechanics.length > 0
+    filterName.trim() !== '' || filterColors.length > 0 || filterBracket !== 'any' || filterArchetype !== 'any'
 
   function clearFilters(): void {
     setFilterName('')
     setFilterColors([])
     setFilterColorMode('atLeast')
     setFilterBracket('any')
-    setFilterCoreMechanics([])
+    setFilterArchetype('any')
   }
 
   function toggleFilterColor(code: string): void {
     setFilterColors((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]))
-  }
-
-  function toggleFilterCoreMechanic(tag: string): void {
-    setFilterCoreMechanics((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
   }
 
   // A pure display filter — it only ever changes what's rendered from `decks`, never `decks`
@@ -276,13 +274,11 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
       if (filterBracket === 'none' && deck.bracket !== null) return false
       if (typeof filterBracket === 'number' && deck.bracket !== filterBracket) return false
 
-      if (filterCoreMechanics.length > 0 && !filterCoreMechanics.some((t) => deck.coreMechanicTags.includes(t))) {
-        return false
-      }
+      if (filterArchetype !== 'any' && deck.archetypeKey !== filterArchetype) return false
 
       return true
     })
-  }, [decksWithIdentity, filterName, filterColors, filterColorMode, filterBracket, filterCoreMechanics])
+  }, [decksWithIdentity, filterName, filterColors, filterColorMode, filterBracket, filterArchetype])
 
   if (picking && createStep === 'secondary' && primaryCommander) {
     const trimmed = secondQuery.trim()
@@ -297,10 +293,10 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
               setPrimaryCommander(null)
             }}
           >
-            ← Back
+            {t('account.back')}
           </button>
           <h2 className="set-detail__title">
-            {secondMode === 'background' ? 'Choose a Background' : 'Choose a partner'} for{' '}
+            {secondMode === 'background' ? t('decks.chooseBackground') : t('decks.choosePartner')} {t('decks.for')}{' '}
             {primaryCommander.name}
           </h2>
           <button
@@ -308,16 +304,16 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
             onClick={() => finalizeCreate(primaryCommander, null)}
             disabled={creating}
           >
-            Skip — single commander
+            {t('decks.skipSingleCommander')}
           </button>
         </div>
-        {creating && <p className="app__hint">Creating deck…</p>}
+        {creating && <p className="app__hint">{t('decks.creatingDeck')}</p>}
         {!creating && (
           <>
             <input
               className="app__search"
               type="text"
-              placeholder={secondMode === 'background' ? 'Search backgrounds…' : 'Search for a partner…'}
+              placeholder={secondMode === 'background' ? t('decks.searchBackgrounds') : t('decks.searchPartner')}
               value={secondQuery}
               onChange={(e) => setSecondQuery(e.target.value)}
               autoFocus
@@ -325,7 +321,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
             <CardResults
               query={query}
               sort={SORT_OPTIONS[0]}
-              emptyHint="No results."
+              emptyHint={t('decks.noResults')}
               onSelect={(c) => finalizeCreate(primaryCommander, c)}
               rawText={trimmed}
             />
@@ -340,11 +336,11 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
       <div className="app__results">
         <div className="app__results-toolbar">
           <button className="back-link" onClick={resetCreateFlow}>
-            ← Cancel
+            ← {t('decks.cancel')}
           </button>
-          <h2 className="set-detail__title">Choose a commander</h2>
+          <h2 className="set-detail__title">{t('decks.chooseCommander')}</h2>
         </div>
-        {creating && <p className="app__hint">Creating deck…</p>}
+        {creating && <p className="app__hint">{t('decks.creatingDeck')}</p>}
         {!creating && <CommanderPicker onSelect={handlePickPrimary} />}
       </div>
     )
@@ -353,29 +349,27 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
   return (
     <div className="app__results">
       <div className="app__results-toolbar">
-        <h2 className="set-detail__title">My Decks</h2>
+        <h2 className="set-detail__title">{t('decks.title')}</h2>
         <button className="secondary-button" onClick={toggleSimplified}>
-          {simplified ? 'Show Art' : 'Simplified View'}
+          {simplified ? t('decks.showArt') : t('decks.simplifiedView')}
         </button>
         <button className="primary-button" onClick={() => setPicking(true)}>
-          + New Deck
+          {t('decks.newDeck')}
         </button>
       </div>
 
-      {loading && <p className="app__hint">Loading decks…</p>}
+      {loading && <p className="app__hint">{t('decks.loading')}</p>}
       {error && <p className="app__error">{error}</p>}
-      {!loading && !error && decks.length === 0 && (
-        <p className="app__hint">No decks yet — create one to get started.</p>
-      )}
+      {!loading && !error && decks.length === 0 && <p className="app__hint">{t('decks.empty')}</p>}
 
       {!loading && !error && decks.length > 0 && (
         <div className="deck-filter-bar">
           <div className="filter-group">
-            <span className="filter-group__label">Name</span>
+            <span className="filter-group__label">{t('decks.filterName')}</span>
             <input
               type="text"
               className="filter-text"
-              placeholder="Search decks…"
+              placeholder={t('decks.filterSearchPlaceholder')}
               value={filterName}
               onChange={(e) => setFilterName(e.target.value)}
             />
@@ -398,13 +392,13 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
               value={filterColorMode}
               onChange={(e) => setFilterColorMode(e.target.value as 'atLeast' | 'exactly')}
             >
-              <option value="atLeast">Includes colors</option>
-              <option value="exactly">Exact combination</option>
+              <option value="atLeast">{t('decks.includesColors')}</option>
+              <option value="exactly">{t('decks.exactCombination')}</option>
             </select>
           </div>
 
           <div className="filter-group">
-            <span className="filter-group__label">Bracket</span>
+            <span className="filter-group__label">{t('decks.bracket')}</span>
             <select
               className="filter-select"
               value={filterBracket}
@@ -413,43 +407,38 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                 setFilterBracket(v === 'any' || v === 'none' ? v : (Number(v) as 1 | 2 | 3 | 4 | 5))
               }}
             >
-              <option value="any">Any bracket</option>
-              <option value="none">No bracket</option>
-              <option value="1">Bracket 1</option>
-              <option value="2">Bracket 2</option>
-              <option value="3">Bracket 3</option>
-              <option value="4">Bracket 4</option>
-              <option value="5">Bracket 5</option>
+              <option value="any">{t('decks.anyBracket')}</option>
+              <option value="none">{t('decks.noBracket')}</option>
+              <option value="1">{t('decks.bracketN', { n: '1' })}</option>
+              <option value="2">{t('decks.bracketN', { n: '2' })}</option>
+              <option value="3">{t('decks.bracketN', { n: '3' })}</option>
+              <option value="4">{t('decks.bracketN', { n: '4' })}</option>
+              <option value="5">{t('decks.bracketN', { n: '5' })}</option>
             </select>
           </div>
 
-          {allCoreMechanicTags.length > 0 && (
-            <div className="filter-group">
-              <span className="filter-group__label">Core Mechanics</span>
-              <div className="filter-chip-row">
-                {allCoreMechanicTags.map((tag) => (
-                  <button
-                    key={tag}
-                    className={`filter-chip filter-chip--text ${filterCoreMechanics.includes(tag) ? 'is-active' : ''}`}
-                    onClick={() => toggleFilterCoreMechanic(tag)}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <div className="filter-group">
+            <span className="filter-group__label">{t('decks.archetype')}</span>
+            <select className="filter-select" value={filterArchetype} onChange={(e) => setFilterArchetype(e.target.value)}>
+              <option value="any">{t('decks.anyArchetype')}</option>
+              {ARCHETYPE_OPTIONS.map((a) => (
+                <option key={a.key} value={a.key}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {filtersActive && (
             <button className="filter-clear" onClick={clearFilters}>
-              Clear filters
+              {t('decks.clearFilters')}
             </button>
           )}
         </div>
       )}
 
       {!loading && !error && decks.length > 0 && visibleDecks.length === 0 && (
-        <p className="app__hint">No decks match your filters.</p>
+        <p className="app__hint">{t('decks.noMatches')}</p>
       )}
 
       <div className="deck-list">
@@ -497,7 +486,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                 />
               )}
               <span className="deck-card__accent" style={{ background: colorIdentityGradient(colorIdentity) }} />
-              <span className="deck-card__drag-handle" title="Drag to reorder">
+              <span className="deck-card__drag-handle" title={t('decks.dragToReorder')}>
                 ⠿
               </span>
               <span
@@ -519,7 +508,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                     setDeckMenu({ deckId: deck.id, right, top: rect.bottom + 4 })
                   }
                 }}
-                title="Deck options"
+                title={t('decks.deckOptions')}
               >
                 ⋮
               </span>
@@ -549,7 +538,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                           handleDuplicate(deck.id)
                         }}
                       >
-                        Duplicate Deck
+                        {t('decks.duplicateDeck')}
                       </button>
                       <button
                         onClick={(e) => {
@@ -557,7 +546,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                           handleExport(deck)
                         }}
                       >
-                        Export Deck
+                        {t('decks.exportDeck')}
                       </button>
                       <button
                         className="tag-menu__destructive"
@@ -566,7 +555,7 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                           requestDelete(deck)
                         }}
                       >
-                        Delete Deck
+                        {t('decks.deleteDeck')}
                       </button>
                     </div>
                   </>,
@@ -581,12 +570,16 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                         className="deck-card__image deck-card__image--behind"
                         src={partner.image_uris.small}
                         alt={partner.name}
+                        loading="lazy"
+                        decoding="async"
                       />
                     )}
                     <img
                       className="deck-card__image deck-card__image--front"
                       src={commander.image_uris.small}
                       alt={deck.commanderName}
+                      loading="lazy"
+                      decoding="async"
                     />
                   </div>
                 )}
@@ -600,19 +593,21 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                       {deck.partnerCommanderName ? ` + ${deck.partnerCommanderName}` : ''}
                     </span>
                     <span className="deck-card__dot">·</span>
-                    <span>{deck.cardIds.length + 1 + (deck.partnerCommanderId ? 1 : 0)} card(s)</span>
+                    <span>
+                      {t('decks.cardCount', {
+                        count: String(deck.cardIds.length + 1 + (deck.partnerCommanderId ? 1 : 0))
+                      })}
+                    </span>
                   </div>
                 </div>
 
                 <div className="deck-card__stats">
-                  {deck.coreMechanicTags.length > 0 && (
+                  {ARCHETYPE_LABEL_BY_KEY.has(deck.archetypeKey) && (
                     <>
-                      <div className="deck-card__stat deck-card__stat--core-mechanics">
-                        {deck.coreMechanicTags.map((tag) => (
-                          <span key={tag} className="deck-card__core-mechanic-badge" title="Core Mechanic">
-                            {tag}
-                          </span>
-                        ))}
+                      <div className="deck-card__stat deck-card__stat--archetype">
+                        <span className="deck-card__archetype-badge" title={t('decks.archetypeTitle')}>
+                          {ARCHETYPE_LABEL_BY_KEY.get(deck.archetypeKey)}
+                        </span>
                       </div>
                       <div className="deck-card__stat-divider" />
                     </>
@@ -651,13 +646,13 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
                       data-empty={deck.bracket == null}
                       style={deck.bracket ? { color: bracketColor(deck.bracket) } : undefined}
                     >
-                      {deck.bracket ? `Bracket ${deck.bracket}` : 'No bracket'}
+                      {deck.bracket ? t('decks.bracketN', { n: String(deck.bracket) }) : t('decks.noBracket')}
                     </span>
                   </div>
                   <div className="deck-card__stat-divider" />
                   <div className="deck-card__stat deck-card__stat--record">
                     {rate === null ? (
-                      <span className="deck-card__stat-value deck-card__stat-value--muted">No games</span>
+                      <span className="deck-card__stat-value deck-card__stat-value--muted">{t('decks.noGames')}</span>
                     ) : (
                       <span className="deck-card__record-line">
                         <span className="deck-card__record-wl">
@@ -683,9 +678,9 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
               ×
             </button>
             <h3 className="section-heading" style={{ marginTop: 0 }}>
-              Export — {exportModal.deckName}
+              {t('decks.export.title', { name: exportModal.deckName })}
             </h3>
-            <p className="app__hint">Edit if needed, then copy and paste into another site's import box.</p>
+            <p className="app__hint">{t('decks.export.hint')}</p>
             <textarea
               className="export-deck-modal__textarea"
               value={exportModal.text}
@@ -694,10 +689,10 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
             />
             <div className="export-deck-modal__actions">
               <button className="secondary-button" onClick={() => setExportModal(null)}>
-                Close
+                {t('decks.export.close')}
               </button>
               <button className="primary-button" onClick={copyExportText}>
-                {exportCopied ? '✓ Copied!' : 'Copy Text'}
+                {exportCopied ? t('decks.export.copied') : t('decks.export.copy')}
               </button>
             </div>
           </div>
@@ -708,17 +703,15 @@ export default function DecksBrowser({ onOpenDeck }: Props) {
         <div className="card-detail-overlay" onClick={() => setDeleteConfirm(null)}>
           <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
             <h3 className="section-heading" style={{ marginTop: 0 }}>
-              Delete Deck
+              {t('decks.deleteDeck')}
             </h3>
-            <p className="app__hint">
-              Delete "{deleteConfirm.name}"? This cannot be undone.
-            </p>
+            <p className="app__hint">{t('decks.deleteConfirm', { name: deleteConfirm.name })}</p>
             <div className="export-deck-modal__actions">
               <button className="secondary-button" onClick={() => setDeleteConfirm(null)}>
-                Cancel
+                {t('decks.cancel')}
               </button>
               <button className="primary-button confirm-modal__destructive" onClick={confirmDelete}>
-                Delete Deck
+                {t('decks.deleteDeck')}
               </button>
             </div>
           </div>

@@ -17,7 +17,7 @@ import {
   requiredColorsForCard,
   simulateColorAccessProbability
 } from '../deckAnalytics'
-import { resolveCardTags, type CardTagOverride } from '../cardTagging'
+import { resolveCardTags, type CardTagOverride, type TaggerCardData } from '../cardTagging'
 import type { ScryfallCard } from '../types'
 
 // Community-standard EDH targets — not hard rules, just the usual rough guidance for a
@@ -58,11 +58,16 @@ interface Props {
   commanderCount: number
   commander: ScryfallCard | null
   cardTagOverrides: Map<string, CardTagOverride>
+  taggerDataByOracleId: Map<string, TaggerCardData>
+  userCardTags?: Record<string, string[]>
   // Right-click menu actions for the Deck Balance suggestion tiles — omit any to leave that
   // option out of the menu (matches the same convention as CommanderView/TagSearchView).
   onAddToDeck?: (card: ScryfallCard) => void
   onAddToPool?: (card: ScryfallCard) => void
   onAddToWant?: (card: ScryfallCard) => void
+  // Clicking a type/subtype word in a suggestion's inspect view jumps to the main Search tab —
+  // see App.tsx's handleTypeSearch, threaded down through DeckBuilder.
+  onTypeSearch?: (term: string) => void
 }
 
 export default function DeckAnalyticsView({
@@ -74,9 +79,12 @@ export default function DeckAnalyticsView({
   commanderCount,
   commander,
   cardTagOverrides,
+  taggerDataByOracleId,
+  userCardTags,
   onAddToDeck,
   onAddToPool,
-  onAddToWant
+  onAddToWant,
+  onTypeSearch
 }: Props) {
   const [showAllTags, setShowAllTags] = useState(false)
   const [balanceFilterRow, setBalanceFilterRow] = useState<{ tags: string[]; label: string } | null>(null)
@@ -135,12 +143,17 @@ export default function DeckAnalyticsView({
     () =>
       BALANCE_TARGETS.map((t) => {
         const count = deckCards.filter((card) => {
-          const cardTags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+          const cardTags = resolveCardTags(
+            card,
+            cardTagOverrides.get(card.oracle_id),
+            taggerDataByOracleId.get(card.oracle_id),
+            userCardTags?.[card.oracle_id]
+          )
           return t.tags.some((tag) => cardTags.includes(tag))
         }).length
         return { ...t, count }
       }),
-    [deckCards, cardTagOverrides]
+    [deckCards, cardTagOverrides, taggerDataByOracleId, userCardTags]
   )
   const underTargetRows = balanceRows.filter((r) => r.count < r.min)
 
@@ -205,10 +218,15 @@ export default function DeckAnalyticsView({
   const balanceFilterCards = useMemo(() => {
     if (!balanceFilterRow) return []
     return deckCards.filter((card) => {
-      const cardTags = resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+      const cardTags = resolveCardTags(
+        card,
+        cardTagOverrides.get(card.oracle_id),
+        taggerDataByOracleId.get(card.oracle_id),
+        userCardTags?.[card.oracle_id]
+      )
       return balanceFilterRow.tags.some((tag) => cardTags.includes(tag))
     })
-  }, [balanceFilterRow, deckCards, cardTagOverrides])
+  }, [balanceFilterRow, deckCards, cardTagOverrides, taggerDataByOracleId, userCardTags])
   const pipCounts = useMemo(() => computePipCounts(deckCards), [deckCards])
   const typeBreakdown = useMemo(() => computeTypeBreakdown(deckCards), [deckCards])
   const idealBasics = useMemo(
@@ -503,7 +521,9 @@ export default function DeckAnalyticsView({
         </div>
       )}
 
-      {viewingSuggestion && <CardDetail card={viewingSuggestion} onClose={() => setViewingSuggestion(null)} />}
+      {viewingSuggestion && (
+        <CardDetail card={viewingSuggestion} onClose={() => setViewingSuggestion(null)} onTypeClick={onTypeSearch} />
+      )}
 
       {suggestionContextMenu && (
         <CardContextMenu

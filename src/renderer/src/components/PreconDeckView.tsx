@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import CardTile from './CardTile'
 import CardDetail from './CardDetail'
 import ColorPips from './ColorPips'
@@ -21,6 +21,9 @@ interface PreconDeck {
 interface Props {
   preconId: string
   onBack: () => void
+  // Clicking a type/subtype word in a card's inspect view jumps to the main Search tab — see
+  // App.tsx's handleTypeSearch.
+  onTypeSearch: (term: string) => void
 }
 
 const DECK_CATEGORY_LABELS: Record<string, string> = {
@@ -49,11 +52,13 @@ const DECK_CATEGORY_DASH_COLORS: Record<string, string> = {
 }
 
 // Same TOC/collapse behavior as DeckBuilder's useCategorySidebar — a read-only viewer still
-// benefits from jumping straight to a category in a 100-card list.
-function useCategorySidebar() {
+// benefits from jumping straight to a category in a 100-card list. pageTopRef (shared, points at
+// the outermost .app__results div — see PreconDeckView's own pageTopRef) is what "Back to Top"
+// actually scrolls to now — it used to scroll to this section's own heading instead, which sits
+// below the "← back"/Export/Copy toolbar, so "back to top" never actually reached the true top.
+function useCategorySidebar(pageTopRef: RefObject<HTMLElement | null>) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map())
-  const topRef = useRef<HTMLHeadingElement>(null)
 
   function toggleCollapsed(category: string): void {
     setCollapsed((prev) => {
@@ -69,10 +74,15 @@ function useCategorySidebar() {
   }
 
   function scrollToTop(): void {
-    topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // pageTopRef points at .app__results itself — the actual scrolling element (overflow-y:
+    // auto), not a child of it. scrollIntoView scrolls the nearest scrollable ANCESTOR of its
+    // target, so calling it here tried to scroll whatever's above .app__results (nothing
+    // actually scrolls there), which is why this silently did nothing. Scrolling the container
+    // directly is the correct call when the ref IS the scroller, not content inside it.
+    pageTopRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  return { collapsed, toggleCollapsed, sectionRefs, topRef, scrollToSection, scrollToTop }
+  return { collapsed, toggleCollapsed, sectionRefs, scrollToSection, scrollToTop }
 }
 
 // A read-only sibling to DeckBuilder — a precon isn't editable (see PreconsBrowser), so this
@@ -80,7 +90,7 @@ function useCategorySidebar() {
 // EDHREC tab, no Card Pool/Want, and CardDetail is shown without a deckMode prop so it never
 // offers a remove or printing-swap control either. It does reuse DeckBuilder's category
 // sidebar/TOC for navigating a large decklist, plus Export and Copy to My Decks.
-export default function PreconDeckView({ preconId, onBack }: Props) {
+export default function PreconDeckView({ preconId, onBack, onTypeSearch }: Props) {
   const [precon, setPrecon] = useState<PreconDeck | null>(null)
   const [cardsById, setCardsById] = useState<Record<string, ScryfallCard>>({})
   const [loading, setLoading] = useState(true)
@@ -90,7 +100,10 @@ export default function PreconDeckView({ preconId, onBack }: Props) {
   const [exportCopied, setExportCopied] = useState(false)
   const [copying, setCopying] = useState(false)
   const [copiedNotice, setCopiedNotice] = useState<string | null>(null)
-  const sidebar = useCategorySidebar()
+  // "Back to Top" target — see the outermost <div className="app__results" ref={pageTopRef}>
+  // below, which holds the "← back" link and Export/Copy toolbar.
+  const pageTopRef = useRef<HTMLDivElement>(null)
+  const sidebar = useCategorySidebar(pageTopRef)
 
   useEffect(() => {
     let cancelled = false
@@ -201,7 +214,7 @@ export default function PreconDeckView({ preconId, onBack }: Props) {
   }
 
   return (
-    <div className="app__results">
+    <div className="app__results" ref={pageTopRef}>
       <div className="app__results-toolbar">
         <button className="back-link back-link--nav" onClick={onBack}>
           ← Precons
@@ -264,7 +277,7 @@ export default function PreconDeckView({ preconId, onBack }: Props) {
         <p className="app__hint">{deckCards.length + 1 + (partner ? 1 : 0)} card(s) — view only, not editable.</p>
       </div>
 
-      <h3 className="section-heading" ref={sidebar.topRef}>
+      <h3 className="section-heading">
         Deck ({deckCards.length} card{deckCards.length === 1 ? '' : 's'})
       </h3>
 
@@ -331,7 +344,9 @@ export default function PreconDeckView({ preconId, onBack }: Props) {
         </div>
       )}
 
-      {viewingCard && <CardDetail card={viewingCard} onClose={() => setViewingCard(null)} />}
+      {viewingCard && (
+        <CardDetail card={viewingCard} onClose={() => setViewingCard(null)} onTypeClick={onTypeSearch} />
+      )}
 
       {exportModal && (
         <div className="card-detail-overlay" onClick={() => setExportModal(null)}>

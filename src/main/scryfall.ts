@@ -1,3 +1,5 @@
+import { getMainLocale } from './localePreference'
+
 const API_BASE = 'https://api.scryfall.com'
 const USER_AGENT = 'BiblioPLEX/0.1 (https://github.com/; local dev build)'
 
@@ -88,6 +90,66 @@ function isScryfallError(x: unknown): x is ScryfallError {
   return typeof x === 'object' && x !== null && (x as { error?: unknown }).error === true
 }
 
+// When the renderer's locale is pt-BR (see localePreference.ts), card-fetching functions below
+// swap in the Portuguese printing's *presentation* fields only — image_uris (or per-face for
+// double-faced cards) and printed_name. Gameplay fields (oracle text, type_line, mana_cost,
+// legalities, and crucially the English oracle `name` itself, which cardTagging.ts's regex
+// rules and singleton/basic-land matching depend on) are deliberately left untouched — this is
+// a display-language substitution, not a data-language switch. A printing without a Portuguese
+// version (most of Magic's back catalog) just silently falls back to the English art/name.
+interface LocalizableCard {
+  set?: string
+  collector_number?: string
+  image_uris?: unknown
+  printed_name?: string
+  card_faces?: { image_uris?: unknown; printed_name?: string }[]
+}
+
+// Keyed by "<set>/<collector_number>" — null means "confirmed no Portuguese printing exists",
+// cached the same as a hit so a whole deck of untranslated older cards doesn't re-hit the
+// network on every subsequent open.
+const ptPrintingCache = new Map<string, LocalizableCard | null>()
+
+async function getPortuguesePrinting(set: string, collectorNumber: string): Promise<LocalizableCard | null> {
+  const key = `${set}/${collectorNumber}`
+  if (ptPrintingCache.has(key)) return ptPrintingCache.get(key) ?? null
+
+  const result = await getJson(`${API_BASE}/cards/${encodeURIComponent(set)}/${encodeURIComponent(collectorNumber)}/pt`)
+  const printing = isScryfallError(result) ? null : (result as LocalizableCard)
+  ptPrintingCache.set(key, printing)
+  return printing
+}
+
+async function localizeCard<T extends LocalizableCard>(card: T): Promise<T> {
+  if (getMainLocale() !== 'pt-BR' || !card?.set || !card.collector_number) return card
+  const pt = await getPortuguesePrinting(card.set, card.collector_number)
+  if (!pt) return card
+
+  if (card.card_faces && pt.card_faces) {
+    return {
+      ...card,
+      card_faces: card.card_faces.map((face, i) => ({
+        ...face,
+        image_uris: pt.card_faces?.[i]?.image_uris ?? face.image_uris,
+        printed_name: pt.card_faces?.[i]?.printed_name ?? face.printed_name
+      }))
+    }
+  }
+  return { ...card, image_uris: pt.image_uris ?? card.image_uris, printed_name: pt.printed_name ?? card.printed_name }
+}
+
+// On-demand, single-card localized art lookup — used by CardDetail when it opens a card while
+// pt-BR is active. Bulk list/grid functions (search, deck grids, precon lists) deliberately
+// don't call this per-card: at Scryfall's rate limit, one extra request per card turns loading
+// a 99-card deck or the ~300-commander Precons list into a many-second stall (this is exactly
+// what got reported as "loading cards and precons seems to be getting stuck" — that regression
+// is why bulk localization was pulled back out). A single CardDetail open only ever pays for
+// one extra request, so it stays instant while still surfacing Portuguese art where it exists.
+export async function getLocalizedCardArt(set: string, collectorNumber: string): Promise<unknown> {
+  if (getMainLocale() !== 'pt-BR') return null
+  return getPortuguesePrinting(set, collectorNumber)
+}
+
 export interface SearchOptions {
   order?: string
   dir?: 'asc' | 'desc'
@@ -106,7 +168,8 @@ export async function searchCards(query: string, options: SearchOptions = {}): P
 }
 
 export async function getCardById(id: string): Promise<unknown> {
-  return getJson(`${API_BASE}/cards/${encodeURIComponent(id)}`)
+  const result = await getJson(`${API_BASE}/cards/${encodeURIComponent(id)}`)
+  return isScryfallError(result) ? result : localizeCard(result as LocalizableCard)
 }
 
 // Scryfall's plain-text search only matches the English oracle name — a foreign printed name
@@ -114,7 +177,8 @@ export async function getCardById(id: string): Promise<unknown> {
 // fuzzy-named endpoint resolves it correctly, so this is the fallback path for foreign-name
 // search rather than a change to searchCards itself.
 export async function getCardByFuzzyName(name: string): Promise<unknown> {
-  return getJson(`${API_BASE}/cards/named?fuzzy=${encodeURIComponent(name)}`)
+  const result = await getJson(`${API_BASE}/cards/named?fuzzy=${encodeURIComponent(name)}`)
+  return isScryfallError(result) ? result : localizeCard(result as LocalizableCard)
 }
 
 export async function getSets(): Promise<unknown> {
@@ -145,6 +209,54 @@ export async function getCardNameCatalog(): Promise<unknown> {
     cardNameCatalogCache = (result as { data?: string[] }).data ?? []
   }
   return result
+}
+
+// The base card types (Artifact, Creature, ...) and supertypes (Legendary, Basic, ...) are a
+// small, fixed set with no dedicated Scryfall catalog endpoint — listed here verbatim from the
+// comprehensive rules rather than invented. Everything below the em dash on a type line (Elf,
+// Equipment, Forest, Aura, Adventure, ...) DOES have real catalogs, one per broad card type.
+const BASE_CARD_TYPES = [
+  'Artifact',
+  'Battle',
+  'Conspiracy',
+  'Creature',
+  'Enchantment',
+  'Instant',
+  'Kindred',
+  'Land',
+  'Phenomenon',
+  'Plane',
+  'Planeswalker',
+  'Scheme',
+  'Sorcery',
+  'Vanguard'
+]
+const SUPERTYPES = ['Basic', 'Elite', 'Host', 'Legendary', 'Ongoing', 'Snow', 'World']
+const SUBTYPE_CATALOGS = [
+  'artifact-types',
+  'creature-types',
+  'enchantment-types',
+  'land-types',
+  'planeswalker-types',
+  'spell-types'
+]
+
+// Same one-fetch-per-app-run caching as the name catalog above — merges every type/subtype
+// catalog Scryfall has into one flat, deduped list for TypeAutocomplete (types + subtypes are
+// searched the same way, since Scryfall's own t: operator treats a type line as just one bag of
+// words with no type/subtype distinction in the query itself).
+let cardTypeCatalogCache: string[] | null = null
+
+export async function getCardTypeCatalog(): Promise<unknown> {
+  if (cardTypeCatalogCache) return { object: 'catalog', data: cardTypeCatalogCache }
+
+  const results = await Promise.all(SUBTYPE_CATALOGS.map((name) => getJson(`${API_BASE}/catalog/${name}`)))
+  const failed = results.find(isScryfallError)
+  if (failed) return failed
+
+  const subtypes = results.flatMap((r) => (r as { data?: string[] }).data ?? [])
+  cardTypeCatalogCache = [...new Set([...BASE_CARD_TYPES, ...SUPERTYPES, ...subtypes])].sort()
+  return { object: 'catalog', data: cardTypeCatalogCache }
 }
 
 // POST /cards/collection accepts at most 75 identifiers per call.

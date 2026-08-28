@@ -37,6 +37,27 @@ function combinedTypeLine(card: TaggableCard): string {
   return card.type_line
 }
 
+// A single ability only needs ONE of its clauses to actually produce mana, not every clause —
+// see the renderer copy of this file for the full reasoning (Tagger's "Activated Ability" tag
+// is otherwise its single largest, and least useful, one for a deckbuilder).
+const MANA_CLAUSE = /^(add\b|choose a color\b|you may reveal\b|spend this mana\b)/i
+
+export function isManaOnlyAbilityLand(card: TaggableCard): boolean {
+  if (!combinedTypeLine(card).includes('Land')) return false
+  const lines = combinedOracleText(card)
+    .split('\n')
+    .filter((line) => line.includes(':'))
+  if (lines.length === 0) return false
+  return lines.every((line) => {
+    const effect = line.slice(line.indexOf(':') + 1)
+    const clauses = effect
+      .split('.')
+      .map((c) => c.trim())
+      .filter(Boolean)
+    return clauses.some((clause) => MANA_CLAUSE.test(clause))
+  })
+}
+
 // A card's OWN cost, not just text describing other spells' costs — checked separately from
 // oracle text so a face with no rules text at all (vanilla X creatures are rare but exist)
 // still gets picked up.

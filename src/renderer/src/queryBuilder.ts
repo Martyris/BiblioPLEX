@@ -65,14 +65,12 @@ export const BASE_EXCLUSION_TERMS = [
   EXCLUDE_FUNNY_TERM
 ]
 
-/** Combines free-text search with structured filters into Scryfall query syntax.
- *  Returns '' (no search) when there's no real search intent yet. */
-export function buildQuery(freeText: string, filters: FilterState): string {
-  if (!isSearchable(freeText, filters)) return ''
-
-  const parts: string[] = [...BASE_EXCLUSION_TERMS, EXCLUDE_TOKENS_TERM]
-  const trimmedText = freeText.trim()
-  if (trimmedText) parts.push(trimmedText)
+/** The Scryfall query terms structured filters translate to — everything buildQuery adds on
+ *  top of free text and the always-on exclusions. Factored out so any view with its own base
+ *  scope (e.g. a single set's `e:<code>`) can append the same filter terms to its own query
+ *  instead of going through buildQuery's free-text/searchable-gate logic. */
+export function buildFilterTerms(filters: FilterState): string[] {
+  const parts: string[] = []
 
   if (filters.colors.length > 0) {
     const op = filters.colorMode === 'exactly' ? '=' : '>='
@@ -97,6 +95,19 @@ export function buildQuery(freeText: string, filters: FilterState): string {
 
   const format = filters.format.trim()
   if (format) parts.push(`f:${format}`)
+
+  return parts
+}
+
+/** Combines free-text search with structured filters into Scryfall query syntax.
+ *  Returns '' (no search) when there's no real search intent yet. */
+export function buildQuery(freeText: string, filters: FilterState): string {
+  if (!isSearchable(freeText, filters)) return ''
+
+  const parts: string[] = [...BASE_EXCLUSION_TERMS, EXCLUDE_TOKENS_TERM]
+  const trimmedText = freeText.trim()
+  if (trimmedText) parts.push(trimmedText)
+  parts.push(...buildFilterTerms(filters))
 
   return parts.join(' ')
 }

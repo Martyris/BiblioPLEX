@@ -33,8 +33,9 @@ interface DeckPatch {
   cardPoolIds?: string[]
   wantIds?: string[]
   foilIds?: string[]
+  consideringIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
-  coreMechanicTags?: string[]
+  archetypeKey?: string
 }
 
 const api = {
@@ -45,6 +46,7 @@ const api = {
   getSets: () => ipcRenderer.invoke('scryfall:sets'),
   autocompleteCardNames: (query: string) => ipcRenderer.invoke('scryfall:autocomplete', query),
   getCardNameCatalog: () => ipcRenderer.invoke('scryfall:card-name-catalog'),
+  getCardTypeCatalog: () => ipcRenderer.invoke('scryfall:card-type-catalog'),
   fetchScryfallUrl: (url: string) => ipcRenderer.invoke('scryfall:url', url),
   getCardsByIds: (ids: string[]) => ipcRenderer.invoke('scryfall:collection', ids),
   getCardsByNames: (names: string[]) => ipcRenderer.invoke('scryfall:collection-by-name', names),
@@ -79,9 +81,70 @@ const api = {
     ipcRenderer.invoke('cardtags:get-overrides-batch', oracleIds),
   getCardTagIndexStatus: () => ipcRenderer.invoke('cardtagindex:status'),
   buildCardTagIndex: () => ipcRenderer.invoke('cardtagindex:build'),
+  getCardTagIndexBuildProgress: () => ipcRenderer.invoke('cardtagindex:build-progress'),
+  cancelCardTagIndexBuild: () => ipcRenderer.invoke('cardtagindex:cancel-build'),
   ensureCardTagIndexFresh: () => ipcRenderer.invoke('cardtagindex:ensure-fresh'),
   searchCardsByTags: (tags: string[]) => ipcRenderer.invoke('cardtagindex:search', tags),
-  getAllTagValues: () => ipcRenderer.invoke('cardtagindex:all-tags')
+  getAllTagValues: () => ipcRenderer.invoke('cardtagindex:all-tags'),
+  // Scryfall Tagger data — not yet wired into the live tag-search index or resolveCardTags,
+  // see src/main/tagIndex.ts.
+  getTaggerTagsForOracleId: (oracleId: string) => ipcRenderer.invoke('taggerindex:tags-for-oracle-id', oracleId),
+  getTaggerRollupCategories: (slugs: string[]) => ipcRenderer.invoke('taggerindex:rollup-categories', slugs),
+  isKnownTaggerSlug: (slug: string) => ipcRenderer.invoke('taggerindex:is-known-slug', slug),
+  getAllTaggerTags: () => ipcRenderer.invoke('taggerindex:all-tags'),
+  getTaggerDataBatch: (oracleIds: string[]) => ipcRenderer.invoke('taggerindex:batch', oracleIds),
+  getComboIndexStatus: () => ipcRenderer.invoke('comboindex:status'),
+  getComboIndexBuildProgress: () => ipcRenderer.invoke('comboindex:build-progress'),
+  buildComboIndex: () => ipcRenderer.invoke('comboindex:build'),
+  cancelComboIndexBuild: () => ipcRenderer.invoke('comboindex:cancel-build'),
+  getComboHeavyOracleIds: () => ipcRenderer.invoke('comboindex:heavy-oracle-ids'),
+  warmUpGameSim: () => ipcRenderer.invoke('gamesim:warm-up'),
+  getGameSimStatus: () => ipcRenderer.invoke('gamesim:status'),
+  checkGameSimCards: (cardNames: string[]) => ipcRenderer.invoke('gamesim:check-cards', cardNames),
+  runGameSim: (
+    players: {
+      name: string
+      commanderNames: string[]
+      cardNames: string[]
+      logicRules?: { type: 'holdInstantUntilAttackTrigger'; permanentNames: string[] }[]
+    }[],
+    requestId: string
+  ) => ipcRenderer.invoke('gamesim:run-game', players, requestId),
+  abortGameSim: () => ipcRenderer.invoke('gamesim:abort'),
+  onGameSimProgress: (callback: (progress: unknown) => void) => {
+    const listener = (_event: unknown, progress: unknown): void => callback(progress)
+    ipcRenderer.on('gamesim:progress', listener)
+    return (): void => {
+      ipcRenderer.removeListener('gamesim:progress', listener)
+    }
+  },
+  listAccounts: () => ipcRenderer.invoke('accounts:list'),
+  getCurrentAccount: () => ipcRenderer.invoke('accounts:current'),
+  createAccount: (username: string) => ipcRenderer.invoke('accounts:create', username),
+  switchAccount: (id: string) => ipcRenderer.invoke('accounts:switch', id),
+  signOutAccount: () => ipcRenderer.invoke('accounts:sign-out'),
+  setUsername: (id: string, username: string) => ipcRenderer.invoke('accounts:set-username', id, username),
+  isUsernameAvailable: (username: string, excludingId?: string) =>
+    ipcRenderer.invoke('accounts:username-available', username, excludingId),
+  setProfilePictureCard: (id: string, cardName: string) =>
+    ipcRenderer.invoke('accounts:set-profile-picture-card', id, cardName),
+  setProfilePictureUpload: (id: string, dataUrl: string) =>
+    ipcRenderer.invoke('accounts:set-profile-picture-upload', id, dataUrl),
+  setSchool: (id: string, school: string | null) => ipcRenderer.invoke('accounts:set-school', id, school),
+  setAppLocale: (locale: string) => ipcRenderer.invoke('locale:set', locale),
+  getLocalizedCardArt: (set: string, collectorNumber: string) =>
+    ipcRenderer.invoke('scryfall:localized-art', set, collectorNumber),
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  isWindowMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  onWindowMaximizedChanged: (callback: (isMaximized: boolean) => void) => {
+    const listener = (_event: unknown, isMaximized: boolean): void => callback(isMaximized)
+    ipcRenderer.on('window:maximized-changed', listener)
+    return (): void => {
+      ipcRenderer.removeListener('window:maximized-changed', listener)
+    }
+  }
 }
 
 if (process.contextIsolated) {

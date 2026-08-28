@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ARCHETYPE_OPTIONS, computeDeckScore, gradeFor, scoreColor, type CommanderTagRef } from '../deckScore'
+import { computeDeckScore, gradeFor, scoreColor, type CommanderTagRef } from '../deckScore'
 import { isBasicLand } from '../deckLogic'
-import { resolveCardTags, type CardTagOverride } from '../cardTagging'
+import { resolveCardTags, type CardTagOverride, type TaggerCardData } from '../cardTagging'
 import CardTile from './CardTile'
-import type { ScryfallCard } from '../types'
+import { isSpellbookError, type ScryfallCard, type SpellbookComboResult } from '../types'
 
 interface Props {
   deckCards: ScryfallCard[]
@@ -14,7 +14,15 @@ interface Props {
   synergyWeights: Map<string, number> | null
   synergyLoading: boolean
   commanderTags: CommanderTagRef[]
+  commanderNames: string[]
   cardTagOverrides: Map<string, CardTagOverride>
+  taggerDataByOracleId: Map<string, TaggerCardData>
+  userCardTags?: Record<string, string[]>
+  // The deck's own Archetype choice (see the picker on the main editor screen, next to Basic
+  // Lands) — 'auto' picks the commander's best EDHREC match, 'none' disables archetype-specific
+  // scoring targets entirely, or a specific ARCHETYPE_OPTIONS key forces that archetype. Score
+  // just reads this; it has no picker of its own, so the deck's choice always applies here too.
+  archetypeKey: string
   // Records the computed overall/grade to the deck whenever they change, so the decks list
   // can show a "last recorded" score without recomputing every deck's full score live.
   onScoreComputed?: (overall: number, grade: string) => void
@@ -36,9 +44,12 @@ function cardsForCategory(
   key: string,
   deckCards: ScryfallCard[],
   cardTagOverrides: Map<string, CardTagOverride>,
+  taggerDataByOracleId: Map<string, TaggerCardData>,
+  userCardTags: Record<string, string[]> | undefined,
   synergyOracleIds: Set<string> | null
 ): ScryfallCard[] {
-  const tagsFor = (card: ScryfallCard): string[] => resolveCardTags(card, cardTagOverrides.get(card.oracle_id))
+  const tagsFor = (card: ScryfallCard): string[] =>
+    resolveCardTags(card, cardTagOverrides.get(card.oracle_id), taggerDataByOracleId.get(card.oracle_id), userCardTags?.[card.oracle_id])
   // Basic lands never meaningfully belong in any of these breakdowns — excluding them here
   // also sidesteps the fact that duplicate basics share one printing id, which would
   // otherwise collide as React keys in the popup grid below.
@@ -103,21 +114,62 @@ export default function DeckScoreView({
   synergyWeights,
   synergyLoading,
   commanderTags,
+  commanderNames,
   cardTagOverrides,
+  taggerDataByOracleId,
+  userCardTags,
+  archetypeKey,
   onScoreComputed
 }: Props) {
-  const [archetypeKey, setArchetypeKey] = useState('auto')
   const [selectedCategoryKey, setSelectedCategoryKey] = useState<string | null>(null)
 
   const selectedCategoryCards = useMemo(() => {
     if (!selectedCategoryKey) return []
-    const cards = cardsForCategory(selectedCategoryKey, deckCards, cardTagOverrides, synergyOracleIds)
+    const cards = cardsForCategory(selectedCategoryKey, deckCards, cardTagOverrides, taggerDataByOracleId, userCardTags, synergyOracleIds)
     // Highest synergy-tag match first, within a category — the cards most "on theme" for
     // this specific commander lead, rather than whatever order they were added to the deck.
     return [...cards].sort(
       (a, b) => (synergyWeights?.get(b.oracle_id) ?? 0) - (synergyWeights?.get(a.oracle_id) ?? 0)
     )
-  }, [selectedCategoryKey, deckCards, cardTagOverrides, synergyOracleIds, synergyWeights])
+  }, [selectedCategoryKey, deckCards, cardTagOverrides, taggerDataByOracleId, userCardTags, synergyOracleIds, synergyWeights])
+
+  // A preliminary score (no combo count yet) just to see which archetype would apply — only
+  // worth spending a Commander Spellbook request on a deck actually built around combos,
+  // rather than paying that cost for every deck regardless of archetype.
+  const preliminaryArchetype = useMemo(
+    () =>
+      computeDeckScore({
+        deckCards,
+        deckColorIdentity,
+        deckCardTagCounts,
+        totalDeckSize,
+        synergyOracleIds,
+        commanderTags,
+        archetypeKey
+      }).appliedArchetype?.key,
+    [deckCards, deckColorIdentity, deckCardTagCounts, totalDeckSize, synergyOracleIds, commanderTags, archetypeKey]
+  )
+  const isComboArchetype = preliminaryArchetype === 'combo'
+
+  const [comboCount, setComboCount] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!isComboArchetype) {
+      setComboCount(null)
+      return
+    }
+    let cancelled = false
+    const mainNames = deckCards.map((c) => c.name)
+    window.api.findCombos(mainNames, commanderNames).then((response) => {
+      if (cancelled) return
+      if (!isSpellbookError(response)) {
+        setComboCount((response as SpellbookComboResult).included.length)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isComboArchetype, deckCards, commanderNames])
 
   const result = useMemo(
     () =>
@@ -128,9 +180,19 @@ export default function DeckScoreView({
         totalDeckSize,
         synergyOracleIds,
         commanderTags,
-        archetypeKey
+        archetypeKey,
+        comboCount
       }),
-    [deckCards, deckColorIdentity, deckCardTagCounts, totalDeckSize, synergyOracleIds, commanderTags, archetypeKey]
+    [
+      deckCards,
+      deckColorIdentity,
+      deckCardTagCounts,
+      totalDeckSize,
+      synergyOracleIds,
+      commanderTags,
+      archetypeKey,
+      comboCount
+    ]
   )
   const animatedScore = useAnimatedScore(result.overall)
   const animatedColor = scoreColor(animatedScore)
@@ -157,23 +219,6 @@ export default function DeckScoreView({
       </p>
 
       {result.sizeWarning && <p className="deck-score__size-warning">⚠ {result.sizeWarning}</p>}
-
-      <div className="deck-score__archetype-picker">
-        <label htmlFor="deck-score-archetype">Archetype</label>
-        <select
-          id="deck-score-archetype"
-          value={archetypeKey}
-          onChange={(e) => setArchetypeKey(e.target.value)}
-        >
-          <option value="auto">Auto (best EDHREC match)</option>
-          <option value="none">None (baseline targets)</option>
-          {ARCHETYPE_OPTIONS.map((a) => (
-            <option key={a.key} value={a.key}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </div>
 
       {result.appliedArchetype && result.archetypeNote && (
         <p className="deck-score__archetype-note">

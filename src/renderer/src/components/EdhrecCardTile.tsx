@@ -45,7 +45,7 @@ export default function EdhrecCardTile({ entry, loading, status, onSelect, onCon
       disabled={loading}
     >
       <div className="edhrec-tile__image-wrap">
-        <img src={scryfallImageUrl(entry.id)} alt={entry.name} loading="lazy" />
+        <img src={scryfallImageUrl(entry.id)} alt={entry.name} loading="lazy" decoding="async" />
         {status && (
           <span className={`card-tile__badge ${STATUS_BADGE_CLASS[status]}`}>{STATUS_LABEL[status]}</span>
         )}

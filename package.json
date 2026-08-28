@@ -1,10 +1,10 @@
 {
   "name": "biblioplex",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "BiblioPLEX — MTG deck building, card info, and recommendations desktop app",
   "main": "./out/main/index.js",
-  "author": "",
-  "license": "UNLICENSED",
+  "author": "Martyris",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
@@ -33,5 +33,44 @@
     "@electron-toolkit/utils": "^4.0.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
+  },
+  "build": {
+    "appId": "com.biblioplex.app",
+    "productName": "BiblioPLEX",
+    "files": ["out/**/*"],
+    "extraResources": [
+      {
+        "from": "java-bridge/target/java-bridge-1.0-jar-with-dependencies.jar",
+        "to": "java-bridge/java-bridge-1.0-jar-with-dependencies.jar"
+      },
+      {
+        "from": "resources/tagger-data",
+        "to": "tagger-data"
+      },
+      {
+        "from": "resources/card-tag-index",
+        "to": "card-tag-index"
+      },
+      {
+        "from": "resources/combo-index",
+        "to": "combo-index"
+      }
+    ],
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": "portable",
+      "extraResources": [
+        {
+          "from": "resources/jre-win-x64",
+          "to": "jre-win-x64"
+        }
+      ]
+    },
+    "mac": {
+      "icon": "resources/icon.png"
+    },
+    "linux": {
+      "icon": "resources/icon.png"
+    }
   }
 }
