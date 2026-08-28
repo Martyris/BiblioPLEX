@@ -255,7 +255,18 @@ export default function HomeView({ onNavigate, onSearch }: Props) {
         ))}
       </nav>
 
-      <p className="home-attribution__foss">BiblioPLEX is a free open source platform, now and always.</p>
+      <p className="home-attribution__foss">
+        BiblioPLEX is a free{' '}
+        <a
+          href="https://github.com/Martyris/BiblioPLEX"
+          target="_blank"
+          rel="noreferrer"
+          className="home-attribution__foss-link"
+        >
+          open source
+        </a>{' '}
+        platform, now and always.
+      </p>
 
       {/* Text credits rather than each service's actual logo image — Scryfall's own data-usage
           guidelines explicitly forbid using their logo/name in any way that could read as an
