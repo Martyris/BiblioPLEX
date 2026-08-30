@@ -23,6 +23,14 @@ engine, and more. Physical TCG only.
   and a full rules-accurate bot-vs-bot simulator built on the [XMage](https://github.com/magefree/mage)
   engine.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Home](docs/screenshots/home.png) | ![Search](docs/screenshots/search.png) |
+| ![Commander recommendations](docs/screenshots/commander.png) | ![Deck editor](docs/screenshots/deck-editor.png) |
+| ![Deck Score](docs/screenshots/deck-score.png) | ![Playtest simulation](docs/screenshots/simulation.png) |
+
 ## Stack
 
 `electron-vite` (`src/main` for the Electron/Node main process, `src/preload` for the context
