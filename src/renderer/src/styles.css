@@ -246,6 +246,17 @@ body {
   margin-bottom: 16px;
 }
 
+/* .filter-select's own `width: 100%` (correct for its usual home inside FilterPanel's narrow
+   sidebar column) resolves to a flex-basis of ~100% of the whole toolbar once it's a bare flex
+   child here instead — SortControl was silently claiming almost the entire row, squeezing the
+   title (flex:1, flex-basis 0%) down to a sliver next to it well before any color-identity hint
+   text made that obvious enough to notice. Fixed, content-sized width keeps it compact and
+   leaves the rest of the row to the title. */
+.app__results-toolbar .filter-select {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .set-detail__title {
   flex: 1;
   font-size: 16px;
@@ -360,6 +371,27 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.deck-price {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-right: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #7ee787;
+  cursor: pointer;
+  filter: blur(0);
+  opacity: 1;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+
+/* Kept blurred/dim until clicked again, not just on hover — a screen-share/streaming concern
+   (see DeckBuilder's DECK_PRICE_HIDDEN_KEY comment), so hovering to peek would defeat the point. */
+.deck-price.is-hidden {
+  filter: blur(5px);
+  opacity: 0.25;
 }
 
 .hot-swap-overlay {
@@ -513,6 +545,26 @@ body {
      static rule, don't just pause the animation" fix as opacity above. */
   mask: none !important;
   -webkit-mask: none !important;
+}
+
+.card-tile.is-outside-identity {
+  opacity: 0.5;
+  transition:
+    transform 0.1s ease,
+    opacity 0.15s ease;
+}
+
+.card-tile.is-outside-identity img {
+  filter: grayscale(1);
+  transition: filter 0.15s ease;
+}
+
+.card-tile.is-outside-identity:hover {
+  opacity: 1;
+}
+
+.card-tile.is-outside-identity:hover img {
+  filter: none;
 }
 
 /* Each ellipse (see CardTile.tsx's GHOST_ELLIPSES) has its own duration and a NEGATIVE delay so
@@ -1092,6 +1144,29 @@ body {
 }
 
 .card-detail__flip:hover {
+  background: var(--border);
+}
+
+/* Same neutral treatment as .card-detail__flip above — a cosmetic toggle, not a destructive
+   action, so it doesn't get .card-detail__remove's red/danger styling even in its "Discard"
+   state (clearing a skin isn't the same class of action as removing a card from the deck). */
+.card-detail__proxy-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.card-detail__proxy-art:hover {
   background: var(--border);
 }
 
@@ -2660,14 +2735,31 @@ body {
   color: #fff;
 }
 
-.tag-search__index-row {
-  margin-top: -8px;
+.tag-search__query-row {
+  align-items: flex-start;
+}
+
+.tag-search__query-row .tag-autocomplete {
+  flex: 0 1 360px;
+  margin-bottom: 0;
 }
 
 .tag-search__title {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Trailing text inside .tag-search__title itself (not a separate flex sibling) — SortControl's
+   .filter-select has `width: 100%`, which resolves to a huge flex-basis once it's a bare flex
+   child, and only renders compactly today because .tag-search__title's own flex:1 (still doing
+   exactly what it always did) absorbs/shrinks around it. Splitting the title's flex role out to
+   a second flex item broke that balance; appending inside keeps it untouched. */
+.tag-search__identity-hint {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 8px;
 }
 
 .tag-search__body {
@@ -5465,6 +5557,17 @@ body {
   position: relative;
 }
 
+.account-modal--confirm {
+  max-width: 360px;
+}
+
+.account-edit__index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .account-list {
   display: flex;
   flex-direction: column;
@@ -6145,6 +6248,34 @@ body {
   transform: rotate(90deg) translateY(-3px);
 }
 
+/* Marquee-selected — a distinct blue, not the app's own (purple) --accent, so a selection reads
+   as its own kind of highlight rather than looking like the usual accent-colored interactive
+   state. Outline (not border/box-shadow alone) so it doesn't shift the card's own layout size
+   AND stays visible regardless of hover: .goldfish-card:hover sets its own box-shadow, which
+   would otherwise fully replace (not blend with) a box-shadow-only indicator here since they're
+   the same property — outline is a separate property, immune to that. The glow is still
+   box-shadow, so :hover gets its own combined rule below to keep it too. */
+.goldfish-card.is-selected {
+  outline: 3px solid #4dabf7;
+  outline-offset: 2px;
+  box-shadow: 0 0 16px 2px rgba(77, 171, 247, 0.65);
+}
+
+.goldfish-card.is-selected:hover {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45), 0 0 16px 2px rgba(77, 171, 247, 0.65);
+}
+
+/* Drag-to-select rectangle, position:fixed + portaled to document.body (see
+   PlaytestGoldfishView) so it isn't clipped by the battlefield's own bounds while a fast drag
+   moves outside them. Same blue as .is-selected above, for one consistent selection color. */
+.goldfish-marquee {
+  position: fixed;
+  border: 1px solid #4dabf7;
+  background: rgba(77, 171, 247, 0.15);
+  pointer-events: none;
+  z-index: 200;
+}
+
 .goldfish-card--library-stack {
   cursor: default;
 }
@@ -6198,15 +6329,17 @@ body {
 
 /* Bottom-left counter readout — only shown once a card actually has counters; the first one is
    added via the right-click menu's "Add Counter", then this badge takes over for quick +/-. */
+/* bottom/border-color/color are all set inline per-instance (see PlaytestGoldfishView's
+   renderTile) — bottom stacks each counter TYPE above the previous one, border-color/color give
+   each type its own distinct hue against one constant dark fill (kept solid, not colored, since
+   a couple of palette entries are too light for the number itself to stay readable as a fill). */
 .goldfish-card__counter {
   position: absolute;
   left: 3px;
-  bottom: 3px;
   padding: 1px 5px;
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: var(--text);
   background: rgba(0, 0, 0, 0.75);
   border: 1px solid var(--border);
   border-radius: 5px;

@@ -273,4 +273,9 @@ export interface StoredDeck {
   // user can only ever remove a tag they added here, never one of the card's own official
   // (Scryfall Tagger or regex-fallback) tags — see resolveCardTags in cardTagging.ts.
   userCardTags?: Record<string, string[]>
+  // Oracle id -> a data URL (or two, for a double-faced card's front/back) the user uploaded to
+  // display instead of that card's real art, within this deck only — a cosmetic "skin," not a
+  // printing change. See CardDetail's "Use Proxy Art" and CardTile's proxyArtUrl prop for where
+  // this actually gets rendered.
+  proxyArtByKey?: Record<string, { front: string; back?: string }>
 }

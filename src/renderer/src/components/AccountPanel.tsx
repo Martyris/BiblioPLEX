@@ -1,11 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useCardNameAutocomplete } from '../useCardNameAutocomplete'
 import { SCHOOL_PAIRS } from '../schools'
 import { colorIdentityGradient } from '../colorIdentityName'
 import { isSoundMuted, setSoundMuted } from '../soundSettings'
 import { notifyAccountChanged } from '../accountEvents'
+import { getIndexBuildSnapshot, startCardTagBuild, startComboBuild, subscribeToIndexBuilds } from '../indexBuildStore'
 import { t, useLocale } from '../i18n'
+
+interface CardTagIndexStatus {
+  builtAt: string | null
+  count: number
+}
+
+interface ComboIndexStatus {
+  builtAt: string | null
+  variantCount: number
+  comboCardCount: number
+  stale: boolean
+}
 
 export type ProfilePicture =
   | { type: 'card'; cardName: string; imageUrl: string }
@@ -69,6 +82,43 @@ export default function AccountPanel() {
   const cardAutocomplete = useCardNameAutocomplete(cardQuery)
   const [schoolSaving, setSchoolSaving] = useState(false)
   const [soundMuted, setSoundMutedState] = useState(() => isSoundMuted())
+
+  // Card Tag Index / Combo Index rebuilds — moved here from Tag Search (see that view's own
+  // comment) so they're a deliberate, out-of-the-way maintenance action rather than a button
+  // sitting right next to a search box someone could click by accident. The actual build still
+  // runs through the same module-level store Tag Search's progress bar reads from, so kicking
+  // one off here and switching to Tag Search still shows it in progress there too.
+  const [indexStatus, setIndexStatus] = useState<CardTagIndexStatus | null>(null)
+  const [comboStatus, setComboStatus] = useState<ComboIndexStatus | null>(null)
+  const [pendingIndexBuild, setPendingIndexBuild] = useState<'cardTag' | 'combo' | null>(null)
+  const buildState = useSyncExternalStore(subscribeToIndexBuilds, getIndexBuildSnapshot)
+  const building = buildState.cardTag.building
+  const buildError = buildState.cardTag.error
+  const comboBuilding = buildState.combo.building
+  const comboBuildError = buildState.combo.error
+
+  useEffect(() => {
+    window.api.getCardTagIndexStatus().then(setIndexStatus)
+    window.api.getComboIndexStatus().then(setComboStatus)
+  }, [])
+
+  const wasCardTagBuilding = useRef(building)
+  useEffect(() => {
+    if (wasCardTagBuilding.current && !building) window.api.getCardTagIndexStatus().then(setIndexStatus)
+    wasCardTagBuilding.current = building
+  }, [building])
+
+  const wasComboBuilding = useRef(comboBuilding)
+  useEffect(() => {
+    if (wasComboBuilding.current && !comboBuilding) window.api.getComboIndexStatus().then(setComboStatus)
+    wasComboBuilding.current = comboBuilding
+  }, [comboBuilding])
+
+  function confirmPendingIndexBuild(): void {
+    if (pendingIndexBuild === 'cardTag') startCardTagBuild()
+    else if (pendingIndexBuild === 'combo') startComboBuild()
+    setPendingIndexBuild(null)
+  }
 
   async function refresh(): Promise<void> {
     const [cur, list] = await Promise.all([window.api.getCurrentAccount(), window.api.listAccounts()])
@@ -401,6 +451,45 @@ export default function AccountPanel() {
                   {soundMuted ? t('account.soundsMuted') : t('account.soundsOn')}
                 </button>
 
+                <h4 className="account-edit__section-label">Card Data</h4>
+                <div className="account-edit__index-row">
+                  {indexStatus?.builtAt ? (
+                    <p className="app__hint">
+                      Card Tag Index built {new Date(indexStatus.builtAt).toLocaleString()} ·{' '}
+                      {indexStatus.count.toLocaleString()} cards
+                    </p>
+                  ) : (
+                    <p className="app__hint">No Card Tag Index yet — needed for Tag Search.</p>
+                  )}
+                  <button
+                    className="secondary-button"
+                    onClick={() => setPendingIndexBuild('cardTag')}
+                    disabled={building}
+                  >
+                    {building ? 'Building…' : indexStatus?.builtAt ? 'Rebuild' : 'Build'}
+                  </button>
+                </div>
+                {buildError && <p className="app__error">{buildError}</p>}
+                <div className="account-edit__index-row">
+                  {comboStatus?.builtAt ? (
+                    <p className="app__hint">
+                      Combo Index built {new Date(comboStatus.builtAt).toLocaleString()} ·{' '}
+                      {comboStatus.comboCardCount.toLocaleString()} combo-heavy cards
+                      {comboStatus.stale ? ' · out of date' : ''}
+                    </p>
+                  ) : (
+                    <p className="app__hint">No Combo Index yet — needed for the "Combo" tag.</p>
+                  )}
+                  <button
+                    className="secondary-button"
+                    onClick={() => setPendingIndexBuild('combo')}
+                    disabled={comboBuilding}
+                  >
+                    {comboBuilding ? 'Crawling…' : comboStatus?.builtAt ? 'Rebuild' : 'Build'}
+                  </button>
+                </div>
+                {comboBuildError && <p className="app__error">{comboBuildError}</p>}
+
                 <div className="account-edit__username-row">
                   <input
                     type="text"
@@ -431,6 +520,29 @@ export default function AccountPanel() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {pendingIndexBuild && (
+        <div className="card-detail-overlay" onClick={() => setPendingIndexBuild(null)}>
+          <div className="account-modal account-modal--confirm" onClick={(e) => e.stopPropagation()}>
+            <h3 className="section-heading" style={{ marginTop: 0 }}>
+              {pendingIndexBuild === 'cardTag' ? 'Rebuild Card Tag Index?' : 'Rebuild Combo Index?'}
+            </h3>
+            <p className="app__hint">
+              {pendingIndexBuild === 'cardTag'
+                ? "This downloads and processes Scryfall's card database — it can take a few minutes."
+                : 'This crawls every combo Commander Spellbook knows about — it can take a few minutes.'}
+            </p>
+            <div className="export-deck-modal__actions">
+              <button className="secondary-button" onClick={() => setPendingIndexBuild(null)}>
+                Cancel
+              </button>
+              <button className="primary-button" onClick={confirmPendingIndexBuild}>
+                Start
+              </button>
+            </div>
           </div>
         </div>
       )}

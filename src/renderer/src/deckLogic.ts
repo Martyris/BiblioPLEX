@@ -77,14 +77,17 @@ export function isCardInDeck(deckCards: ScryfallCard[], oracleId: string): boole
 
 export type IllegalReason = 'color-identity' | 'banned'
 
+export function isOutsideColorIdentity(card: ScryfallCard, deckColorIdentity: string[]): boolean {
+  const identity = new Set(deckColorIdentity)
+  return (card.color_identity ?? []).some((c) => !identity.has(c))
+}
+
 /** Checked independently, not "is this card legal" — a card can fail on either axis (or
  *  both), and the caller (a badge) only ever needs to show one, so banned wins the tie since
  *  it's the more absolute of the two problems. */
 export function getIllegalReason(card: ScryfallCard, deckColorIdentity: string[]): IllegalReason | null {
   if (card.legalities?.commander === 'banned') return 'banned'
-  const identity = new Set(deckColorIdentity)
-  const outsideIdentity = (card.color_identity ?? []).some((c) => !identity.has(c))
-  if (outsideIdentity) return 'color-identity'
+  if (isOutsideColorIdentity(card, deckColorIdentity)) return 'color-identity'
   return null
 }
 

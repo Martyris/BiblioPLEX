@@ -146,6 +146,11 @@ type View =
   | 'typeSearch'
   | 'goldfish'
 
+// Global, not per-deck — same "plain localStorage flag" convention as DecksBrowser's own
+// simplified-view toggle. Blurring the price is a screen-share/streaming concern more than a
+// per-deck preference, so one flag covering every deck you open is the more useful default.
+const DECK_PRICE_HIDDEN_KEY = 'mtgplatform.deckPriceHidden'
+
 export default function DeckBuilder({ deckId, onBack }: Props) {
   const [storedDeck, setStoredDeck] = useState<StoredDeck | null>(null)
   // Mirrors storedDeck, but updated synchronously the instant persist() computes a new deck —
@@ -476,6 +481,44 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const flippedIdSet = useMemo(() => new Set(storedDeck?.flippedIds ?? []), [storedDeck?.flippedIds])
   const consideringIdSet = useMemo(() => new Set(storedDeck?.consideringIds ?? []), [storedDeck?.consideringIds])
 
+  // The deck's own 100 cards only — Card Pool and Want are reference lists of cards that don't
+  // count toward the deck (see their own "Just a reference list" hints), so they're deliberately
+  // left out here even though the same cardsById cache covers them too. Foil-aware (a foiled
+  // copy prices differently), using the same occurrence-keyed foilKeyFor scheme as the rest of
+  // the deck grid so a duplicate basic's later copies aren't all priced as the first one's foil
+  // status.
+  const deckPrice = useMemo(() => {
+    if (!storedDeck) return null
+    let total = 0
+    function addPrice(id: string, isFoil: boolean): void {
+      const card = cardsById[id]
+      if (!card) return
+      const priceStr = (isFoil ? card.prices?.usd_foil : card.prices?.usd) ?? card.prices?.usd ?? card.prices?.usd_foil
+      if (priceStr) total += parseFloat(priceStr)
+    }
+    addPrice(storedDeck.commanderId, foilIdSet.has(storedDeck.commanderId))
+    if (storedDeck.partnerCommanderId) {
+      addPrice(storedDeck.partnerCommanderId, foilIdSet.has(storedDeck.partnerCommanderId))
+    }
+    const occurrenceCount = new Map<string, number>()
+    for (const id of storedDeck.cardIds) {
+      const occurrence = occurrenceCount.get(id) ?? 0
+      occurrenceCount.set(id, occurrence + 1)
+      addPrice(id, foilIdSet.has(foilKeyFor(id, occurrence)))
+    }
+    return total
+  }, [storedDeck, cardsById, foilIdSet])
+
+  const [priceHidden, setPriceHidden] = useState(() => localStorage.getItem(DECK_PRICE_HIDDEN_KEY) === '1')
+
+  function toggleDeckPriceHidden(): void {
+    setPriceHidden((prev) => {
+      const next = !prev
+      localStorage.setItem(DECK_PRICE_HIDDEN_KEY, next ? '1' : '0')
+      return next
+    })
+  }
+
   // "On Deck" is its own bucket ahead of the type categories — a pool card already in the
   // deck has nothing left to do with it, so it's worth calling out separately rather than
   // mixed in among the cards still worth considering.
@@ -709,6 +752,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     archetypeKey?: string
     logicFile?: StoredDeck['logicFile']
     userCardTags?: Record<string, string[]>
+    proxyArtByKey?: Record<string, { front: string; back?: string }>
   }): Promise<void> {
     const base = storedDeckRef.current
     if (!base) return
@@ -749,6 +793,34 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     }
   }
 
+  // Per-deck art override (see StoredDeck.proxyArtByKey) — a cosmetic "skin" over a card's real
+  // art, scoped to this deck only, keyed by oracle id (same convention as userCardTags above:
+  // survives a later printing change for free, and Goldfish can resolve it from a shuffled
+  // card's printing id without needing occurrence/positional tracking). `face` lets a
+  // transform/MDFC card carry independent art on each side, flipped between the same way the
+  // real printing's own two faces are.
+  function setProxyArt(oracleId: string, face: 'front' | 'back', dataUrl: string | null): void {
+    if (!storedDeck) return
+    const next = { ...storedDeck.proxyArtByKey }
+    const updatedEntry = { ...next[oracleId], [face]: dataUrl ?? undefined }
+    // Drop the whole entry once neither side has anything left, rather than leaving an
+    // empty {} sitting in the record forever.
+    if (!updatedEntry.front && !updatedEntry.back) delete next[oracleId]
+    else next[oracleId] = updatedEntry as { front: string; back?: string }
+    persist({ proxyArtByKey: next })
+  }
+
+  // Spread into a CardDetail deckMode object, same pattern as userTagDeckModeProps above.
+  function proxyArtDeckModeProps(oracleId: string): {
+    proxyArt: { front: string; back?: string } | undefined
+    onSetProxyArt: (face: 'front' | 'back', dataUrl: string | null) => void
+  } {
+    return {
+      proxyArt: storedDeck?.proxyArtByKey?.[oracleId],
+      onSetProxyArt: (face: 'front' | 'back', dataUrl: string | null) => setProxyArt(oracleId, face, dataUrl)
+    }
+  }
+
   function addWin(): void {
     if (!storedDeck) return
     persist({ wins: storedDeck.wins + 1 })
@@ -785,7 +857,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         wantIds: storedDeck.wantIds.filter((id) => id !== card.id)
       })
     } else {
-      await persist({ cardIds: newIds })
+      // Clicking an in-deck search result to take it back out is a full removal too (see
+      // handleRemoveId's comment) — only "Move to Pool" is meant to keep a card tracked as owned
+      // after it leaves the deck. toggleCardInDeck never reaches this branch for a basic land
+      // (its own branch always adds), so no isBasicLand guard is needed here.
+      await persist({ cardIds: newIds, cardPoolIds: storedDeck.cardPoolIds.filter((id) => id !== card.id) })
     }
   }
 
@@ -1145,16 +1221,23 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     setDeckCardContextMenu({ card, x: e.clientX, y: e.clientY })
   }
 
+  // A full removal — the card only stays tracked as owned via Card Pool if the user explicitly
+  // chose "Move to Pool" instead (see moveDeckCardToPool). Used by the deck grid's own "Remove
+  // from Deck" (context menu + card-inspect button) and the Add Cards search's toggle-off;
+  // Hot Swap's plain drag-to-Pool-column gesture is its own "move to pool" action and calls
+  // moveDeckCardToPool directly instead of this.
   async function handleRemoveId(id: string): Promise<void> {
     if (!storedDeck) return
     const idx = storedDeck.cardIds.indexOf(id)
     if (idx === -1) return
     const newIds = [...storedDeck.cardIds.slice(0, idx), ...storedDeck.cardIds.slice(idx + 1)]
-    // Only drop the Considering flag once every copy of this id is gone — a duplicate basic
-    // land shares one id, and removing just one copy shouldn't un-flag the rest.
+    // Only drop the Considering flag (and Pool membership) once every copy of this id is gone —
+    // a duplicate basic land shares one id, and removing just one copy shouldn't un-flag/unpool
+    // the rest.
     const stillInDeck = newIds.includes(id)
     await persist({
       cardIds: newIds,
+      cardPoolIds: stillInDeck ? storedDeck.cardPoolIds : storedDeck.cardPoolIds.filter((cid) => cid !== id),
       consideringIds: stillInDeck ? storedDeck.consideringIds : storedDeck.consideringIds.filter((cid) => cid !== id)
     })
   }
@@ -1454,8 +1537,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
       setHotSwapDragSource(null)
       return
     }
+    // Dropping onto the Pool column is the drag equivalent of "Move to Pool" (see that
+    // action's own comment) — the card stays tracked as owned, unlike a plain removal.
     if (target === 'deck') handleToggleCard(hotSwapDragCard)
-    else handleRemoveId(hotSwapDragCard.id)
+    else moveDeckCardToPool(hotSwapDragCard)
     setHotSwapDragCard(null)
     setHotSwapDragSource(null)
   }
@@ -1534,7 +1619,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     } else if (targetSide === 'deck') {
       handleToggleCard(dragged)
     } else {
-      handleRemoveId(dragged.id)
+      // Same "drag to Pool column = Move to Pool" treatment as handleHotSwapDrop above.
+      moveDeckCardToPool(dragged)
     }
     setHotSwapDragCard(null)
     setHotSwapDragSource(null)
@@ -1967,6 +2053,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                 }}
                 marker={getMarker(card)}
                 isFoil={foilIdSet.has(card.id)}
+                proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
               />
             ))}
           </div>
@@ -2028,7 +2115,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
       </div>
 
-      <h3 className="section-heading">Add Cards</h3>
+      <div className="deck-builder__basic-lands-heading-row">
+        <h3 className="section-heading">Add Cards</h3>
+        <span className="app__hint">Cards outside your color identity are grayed out, sorted after the rest.</span>
+      </div>
       <div className="deck-builder__add-cards-row">
       <div className="add-cards-search">
         <input
@@ -2107,6 +2197,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           }}
           isInDeck={(card) => deckOracleIds.has(card.oracle_id)}
           getMarker={getMarker}
+          colorIdentity={deckColorIdentity}
           rawText={trimmedSearch}
           results={addCardsResults}
         />
@@ -2118,6 +2209,16 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           Deck ({totalDeckSize} card{totalDeckSize === 1 ? '' : 's'})
         </h3>
         <div className="deck-builder__deck-heading-actions">
+          {deckPrice !== null && (
+            <button
+              type="button"
+              className={`deck-price ${priceHidden ? 'is-hidden' : ''}`}
+              onClick={toggleDeckPriceHidden}
+              title={priceHidden ? 'Click to reveal the deck price' : 'Click to hide the deck price'}
+            >
+              ${deckPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </button>
+          )}
           <button
             className="secondary-button"
             onClick={(e) => setGroupMenuAnchor({ for: 'deck', x: e.clientX, y: e.clientY })}
@@ -2202,6 +2303,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                                 isFoil={foilIdSet.has(foilKeyFor(card.id, occurrence))}
                                 illegalReason={getIllegalReason(card, deckColorIdentity)}
                                 isConsidering={consideringIdSet.has(card.id)}
+                                proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                                 isGhost
                               />
                             </div>
@@ -2242,6 +2344,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                               isFoil={foilIdSet.has(foilKeyFor(card.id, occurrence))}
                               illegalReason={getIllegalReason(card, deckColorIdentity)}
                               isConsidering={consideringIdSet.has(card.id)}
+                              proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                             />
                           </div>
                         )
@@ -2278,7 +2381,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
 
       {view === 'cardPool' && (
         <>
-          <h3 className="section-heading">Card Pool</h3>
+          <div className="deck-builder__basic-lands-heading-row">
+            <h3 className="section-heading">Card Pool</h3>
+            <span className="app__hint">Cards outside your color identity are grayed out, sorted after the rest.</span>
+          </div>
           <p className="app__hint">
             Cards you have that could slot into this deck. Search to mark a card as owned — click it again
             to remove it from the pool. This is just a reference list; cards don't count toward the deck
@@ -2299,6 +2405,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               onSelect={toggleCardPool}
               isInDeck={(card) => deckOracleIds.has(card.oracle_id)}
               badgeLabel="✓ In Deck"
+              getMarker={getMarker}
+              colorIdentity={deckColorIdentity}
               rawText={cardPoolQuery.trim()}
             />
           )}
@@ -2369,6 +2477,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                               inDeck={deckOracleIds.has(card.oracle_id)}
                               badgeLabel="✓ In Deck"
                               isFoil={foilIdSet.has(card.id)}
+                              proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                             />
                           ))}
                         </div>
@@ -2384,7 +2493,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
 
       {view === 'want' && (
         <>
-          <h3 className="section-heading">Want</h3>
+          <div className="deck-builder__basic-lands-heading-row">
+            <h3 className="section-heading">Want</h3>
+            <span className="app__hint">Cards outside your color identity are grayed out, sorted after the rest.</span>
+          </div>
           <p className="app__hint">
             Cards you want to find for this deck. Search to add one to the list — click it again to remove
             it. Just a reference list, same as Card Pool.
@@ -2405,6 +2517,9 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               badgeLabel="✓ Wanted"
               // Want never gets an outline — just the badge, driven independently of isInDeck.
               getBadge={(card) => storedDeck.wantIds.includes(card.id)}
+              isInDeck={(card) => deckOracleIds.has(card.oracle_id)}
+              getMarker={getMarker}
+              colorIdentity={deckColorIdentity}
               rawText={wantQuery.trim()}
             />
           )}
@@ -2473,6 +2588,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                               }}
                               onContextMenu={(c, e) => handlePoolWantContextMenu('want', c, e)}
                               isFoil={foilIdSet.has(card.id)}
+                              proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                             />
                           ))}
                         </div>
@@ -2633,7 +2749,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
           }}
           deckMode={{
             onPrintingChange: (newCard) => handleTokenPrintingChange(newCard),
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2657,7 +2774,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFlip: () => {
               if (viewingSlotId) toggleFlipped(viewingSlotId)
             },
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2681,7 +2799,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFlip: () => {
               if (viewingSlotId) toggleFlipped(viewingSlotId)
             },
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2710,7 +2829,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFlip: () => {
               if (viewingSlotId) toggleFlipped(foilKeyFor(viewingSlotId, viewingSlotOccurrence))
             },
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2740,7 +2860,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFlip: () => {
               if (viewingSlotId) toggleFlipped(viewingSlotId)
             },
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -2770,7 +2891,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
             },
-            ...userTagDeckModeProps(viewingCard.oracle_id)
+            ...userTagDeckModeProps(viewingCard.oracle_id),
+            ...proxyArtDeckModeProps(viewingCard.oracle_id)
           }}
         />
       )}
@@ -3069,6 +3191,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                           setViewingCard(c)
                         }}
                         isConsidering={consideringIdSet.has(card.id)}
+                        proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                       />
                     </div>
                   ))}
@@ -3135,6 +3258,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
                           setViewingSlotId(c.id)
                           setViewingCard(c)
                         }}
+                        proxyArtUrl={storedDeck?.proxyArtByKey?.[card.oracle_id]?.front}
                       />
                     </div>
                   ))}

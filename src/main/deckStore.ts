@@ -78,6 +78,16 @@ export interface StoredDeck {
   // Tags a user has added to a specific card WITHIN this deck only — see the renderer's
   // types.ts for the full reasoning (purely additive; no per-deck "removed" list).
   userCardTags: Record<string, string[]>
+  // Oracle id -> a data URL (or two, for a double-faced card) the user uploaded to display
+  // instead of that card's real art, within this deck only — a cosmetic "skin," not a printing
+  // change (the card's actual data — name, mana cost, rules text, legality — is untouched; see
+  // CardDetail's "Use Proxy Art"). `back` only ever applies to a transform/MDFC card's second
+  // face — flipping such a card swaps between the two independently. Keyed by oracle id, same
+  // convention as userCardTags above and for the same reasons: it survives a later printing
+  // change for free (no migration code needed), and a Goldfish game — which shuffles cardIds,
+  // destroying any positional/occurrence identity — can still resolve it trivially from whatever
+  // printing id a shuffled card landed on.
+  proxyArtByKey: Record<string, { front: string; back?: string }>
 }
 
 let cache: StoredDeck[] | null = null
@@ -138,7 +148,8 @@ async function load(): Promise<StoredDeck[]> {
       lastScore: d.lastScore ?? null,
       archetypeKey: d.archetypeKey ?? 'auto',
       logicFile: d.logicFile ?? null,
-      userCardTags: d.userCardTags ?? {}
+      userCardTags: d.userCardTags ?? {},
+      proxyArtByKey: d.proxyArtByKey ?? {}
     }))
   } catch {
     cache = []
@@ -195,7 +206,8 @@ export async function createDeck(
     lastScore: null,
     archetypeKey: 'auto',
     logicFile: null,
-    userCardTags: {}
+    userCardTags: {},
+    proxyArtByKey: {}
   }
   await persist([...decks, deck])
   return deck
@@ -222,6 +234,7 @@ export interface DeckPatch {
   archetypeKey?: string
   logicFile?: DeckLogicFile | null
   userCardTags?: Record<string, string[]>
+  proxyArtByKey?: Record<string, { front: string; back?: string }>
 }
 
 export async function updateDeck(id: string, patch: DeckPatch): Promise<StoredDeck | null> {
@@ -278,7 +291,8 @@ export async function createDeckFromPrecon(precon: {
     lastScore: null,
     archetypeKey: 'auto',
     logicFile: null,
-    userCardTags: {}
+    userCardTags: {},
+    proxyArtByKey: {}
   }
   await persist([...decks, deck])
   return deck
@@ -307,6 +321,7 @@ export async function duplicateDeck(id: string): Promise<StoredDeck | null> {
     flippedIds: [...original.flippedIds],
     consideringIds: [...original.consideringIds],
     userCardTags: { ...original.userCardTags },
+    proxyArtByKey: { ...original.proxyArtByKey },
     order: maxOrder + 1,
     createdAt: now,
     updatedAt: now,

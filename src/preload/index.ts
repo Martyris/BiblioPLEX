@@ -51,6 +51,7 @@ interface DeckPatch {
   consideringIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
   archetypeKey?: string
+  proxyArtByKey?: Record<string, { front: string; back?: string }>
 }
 
 const api = {

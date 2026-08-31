@@ -6,6 +6,15 @@
 
 export type GoldfishZone = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'command'
 
+// One tracked counter type on a card ("+1/+1", "Loyalty", "Poison", or anything else the player
+// names) — a card can carry several of these at once, each with its own independent count.
+// Deliberately does NOT affect power/toughness on its own (see ptBoost for that); this is purely
+// what the player is keeping track of.
+export interface CounterEntry {
+  label: string
+  count: number
+}
+
 export interface GoldfishCard {
   // Stable across zone moves and re-renders — independent of cardId, since a deck can (rarely,
   // for basics) contain the same printing more than once, and each physical copy needs its own
@@ -17,10 +26,10 @@ export interface GoldfishCard {
   // meaningless for any other zone, left at whatever it last was.
   x: number
   y: number
-  // Generic counter tracker (bottom-left badge) — purely a number the player is keeping track
-  // of (loyalty, charge, etc.); deliberately does NOT affect power/toughness. Positive/negative
-  // both allowed since not every counter type is a +1/+1.
-  counters: number
+  // Every counter type currently tracked on this card, in the order they were added — the UI
+  // stacks each one's badge just above the previous (see PlaytestGoldfishView's renderTile), so
+  // append-only ordering here is what makes a freshly-added type land on top.
+  counters: CounterEntry[]
   // +1/+1 (positive) or -1/-1 (negative) from clicking the P/T badge directly — independent of
   // `counters` above. Stacks on top of `powerOverride` (or the printed stats if that's null).
   ptBoost: number
@@ -28,6 +37,10 @@ export interface GoldfishCard {
   // that `ptBoost` then stacks on top of. Null means "use the printed values".
   powerOverride: number | null
   faceDown: boolean
+  // Which physical side of a double-faced card (transform/MDFC) is showing — meaningless for a
+  // single-faced card. Distinct from faceDown: faceDown hides a card's identity entirely (morph,
+  // manifest), this just picks between two known, always-visible faces.
+  transformed: boolean
   // Cosmetic only — drives the "COPY" badge; a copy behaves like any other card once created.
   isCopy: boolean
   // True for both "Add Token" tokens and card copies (a copy is, mechanically, a token copy of
@@ -58,10 +71,11 @@ function newCard(cardId: string, x = 0, y = 0, isToken = false): GoldfishCard {
     tapped: false,
     x,
     y,
-    counters: 0,
+    counters: [],
     ptBoost: 0,
     powerOverride: null,
     faceDown: false,
+    transformed: false,
     isCopy: false,
     isToken
   }
@@ -170,10 +184,11 @@ export function moveCard(
     // was in — leaving them behind on a zone change matches how a real game works (a permanent's
     // modifications don't survive it dying, bouncing, etc.).
     tapped: toZone === 'battlefield' ? found.card.tapped : false,
-    counters: changingZone ? 0 : found.card.counters,
+    counters: changingZone ? [] : found.card.counters,
     ptBoost: changingZone ? 0 : found.card.ptBoost,
     powerOverride: changingZone ? null : found.card.powerOverride,
-    faceDown: changingZone ? false : found.card.faceDown
+    faceDown: changingZone ? false : found.card.faceDown,
+    transformed: changingZone ? false : found.card.transformed
   }
 
   if (!changingZone) {
@@ -227,12 +242,34 @@ export function flipCard(state: GoldfishState, instanceId: string): GoldfishStat
   return updateCard(state, instanceId, (c) => ({ ...c, faceDown: !c.faceDown }))
 }
 
-/** Add Counter (+1, left-click on the counter badge) / Remove Counter (-1, right-click) — a
- *  generic tracker, independent of power/toughness. */
-export function adjustCounters(state: GoldfishState, instanceId: string, delta: number): GoldfishState {
-  // `?? 0` guards a card created before this field existed (a game started, then the app
-  // hot-reloaded mid-session) from turning into NaN the first time it's touched.
-  return updateCard(state, instanceId, (c) => ({ ...c, counters: (c.counters ?? 0) + delta }))
+/** Turns a double-faced card (transform or MDFC) over to its other side — a werewolf becoming
+ *  its human/wolf form, an MDFC land side, etc. Only meaningful for a card with two faces; the
+ *  caller (see PlaytestGoldfishView's isTransformable) is what gates the menu action itself. */
+export function transformCard(state: GoldfishState, instanceId: string): GoldfishState {
+  return updateCard(state, instanceId, (c) => ({ ...c, transformed: !c.transformed }))
+}
+
+/** Left-click (+1) / right-click (-1) on one specific counter type's own badge — `index` into
+ *  the card's counters array, independent of power/toughness and of every other counter type
+ *  the card might also be tracking. */
+export function adjustCounterAt(state: GoldfishState, instanceId: string, index: number, delta: number): GoldfishState {
+  return updateCard(state, instanceId, (c) => ({
+    ...c,
+    counters: c.counters.map((entry, i) => (i === index ? { ...entry, count: entry.count + delta } : entry))
+  }))
+}
+
+/** Starts tracking a new counter type on a card — appended to the end of the array, which (per
+ *  the UI's own stacking order) renders just above whatever counters were already there. Starts
+ *  at 1, not 0: this is "put a counter of this type on it," not "begin tracking at zero." */
+export function addCounterType(state: GoldfishState, instanceId: string, label: string): GoldfishState {
+  return updateCard(state, instanceId, (c) => ({ ...c, counters: [...c.counters, { label, count: 1 }] }))
+}
+
+/** Drops an entire counter type (not just decrementing its count to 0) — cleaning up one added
+ *  by mistake, or that's no longer relevant to track. */
+export function removeCounterType(state: GoldfishState, instanceId: string, index: number): GoldfishState {
+  return updateCard(state, instanceId, (c) => ({ ...c, counters: c.counters.filter((_, i) => i !== index) }))
 }
 
 /** Left/right-click on the P/T badge itself — +1/+1 or -1/-1, independent of `counters`. */
@@ -266,11 +303,14 @@ export function copyCard(state: GoldfishState, instanceId: string): GoldfishStat
 /** Untaps everything on the battlefield and advances the turn counter — goldfishing has no
  *  opponent/priority to simulate, so "Next Turn" is just this one manual step. */
 export function nextTurn(state: GoldfishState): GoldfishState {
-  return {
+  const untapped: GoldfishState = {
     ...state,
     turn: state.turn + 1,
     zones: { ...state.zones, battlefield: state.zones.battlefield.map((c) => ({ ...c, tapped: false })) }
   }
+  // A real draw step, same as goldfishing manually hitting Draw — drawCard already no-ops
+  // gracefully on an empty library.
+  return drawCard(untapped)
 }
 
 export function setLife(state: GoldfishState, delta: number): GoldfishState {

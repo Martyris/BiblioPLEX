@@ -6,7 +6,8 @@ export interface SortOption {
 
 export const SORT_OPTIONS: SortOption[] = [
   { order: 'name', dir: 'asc', label: 'Name (A–Z)' },
-  { order: 'edhrec', dir: 'asc', label: 'Popularity (EDHREC)' },
+  { order: 'edhrec', dir: 'asc', label: 'Popularity (EDHREC, Most Popular)' },
+  { order: 'edhrec', dir: 'desc', label: 'Popularity (EDHREC, Least Popular)' },
   { order: 'released', dir: 'desc', label: 'Release Date (Newest)' },
   { order: 'cmc', dir: 'asc', label: 'Mana Value (Low–High)' },
   { order: 'cmc', dir: 'desc', label: 'Mana Value (High–Low)' },

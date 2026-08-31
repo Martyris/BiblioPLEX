@@ -6,7 +6,7 @@ import TagAutocomplete from './TagAutocomplete'
 import SortControl, { SORT_OPTIONS, type SortOption } from './SortControl'
 import { cardMatchesFilters, EMPTY_FILTERS, type FilterState } from '../queryBuilder'
 import type { ScryfallCard } from '../types'
-import { getIndexBuildSnapshot, startCardTagBuild, startComboBuild, subscribeToIndexBuilds } from '../indexBuildStore'
+import { getIndexBuildSnapshot, subscribeToIndexBuilds } from '../indexBuildStore'
 
 interface Props {
   initialTags: string[]
@@ -192,22 +192,18 @@ export default function TagSearchView({
         <button className="back-link back-link--nav" onClick={onBack}>
           ← Back to deck
         </button>
-        <h2 className="set-detail__title tag-search__title">Search by Tag</h2>
-        <SortControl value={sort} onChange={setSort} />
+        <h2 className="set-detail__title tag-search__title">
+          Search by Tag
+          {colorIdentity && (
+            <span className="tag-search__identity-hint">Results filtered to your color identity automatically.</span>
+          )}
+        </h2>
       </div>
 
-      <div className="app__results-toolbar tag-search__index-row">
-        {indexStatus?.builtAt ? (
-          <p className="app__hint">
-            Index built {new Date(indexStatus.builtAt).toLocaleString()} · {indexStatus.count.toLocaleString()} cards
-          </p>
-        ) : (
-          <p className="app__hint">No card tag index yet — build one to search by tag.</p>
-        )}
-        <button className="secondary-button" onClick={startCardTagBuild} disabled={building}>
-          {building ? 'Building…' : indexStatus?.builtAt ? 'Rebuild Index' : 'Build Card Tag Index'}
-        </button>
-      </div>
+      {!indexStatus?.builtAt && (
+        <p className="app__hint">No card tag index yet — build one from your Profile.</p>
+      )}
+      {building && <p className="app__hint">Building…</p>}
       {buildError && <p className="app__error">{buildError}</p>}
       {!indexStatus?.builtAt && (
         <p className="app__hint">
@@ -216,21 +212,12 @@ export default function TagSearchView({
         </p>
       )}
 
-      <div className="app__results-toolbar tag-search__index-row">
-        {comboStatus?.builtAt ? (
-          <p className="app__hint">
-            Combo index built {new Date(comboStatus.builtAt).toLocaleString()} ·{' '}
-            {comboStatus.comboCardCount.toLocaleString()} combo-heavy cards (from{' '}
-            {comboStatus.variantCount.toLocaleString()} combos)
-            {comboStatus.stale ? ' · out of date — the card tag index needs a rebuild after this' : ''}
-          </p>
-        ) : (
-          <p className="app__hint">No combo index yet — build one to enable the "Combo" tag.</p>
-        )}
-        <button className="secondary-button" onClick={startComboBuild} disabled={comboBuilding}>
-          {comboBuilding ? 'Crawling…' : comboStatus?.builtAt ? 'Rebuild Combo Index' : 'Build Combo Index'}
-        </button>
-      </div>
+      {!comboStatus?.builtAt && (
+        <p className="app__hint">No combo index yet — build one from your Profile to enable the "Combo" tag.</p>
+      )}
+      {comboStatus?.stale && (
+        <p className="app__hint">The combo index is out of date — rebuild the card tag index from your Profile.</p>
+      )}
       {comboBuilding && (
         <p className="app__hint">
           {comboBuildProgress.phase === 'rate-limited'
@@ -263,12 +250,15 @@ export default function TagSearchView({
           </li>
         ))}
       </ul>
-      <TagAutocomplete
-        availableTags={availableTags}
-        excludeTags={tags}
-        onAdd={addTag}
-        placeholder="Add another tag to narrow the search…"
-      />
+      <div className="app__results-toolbar tag-search__query-row">
+        <TagAutocomplete
+          availableTags={availableTags}
+          excludeTags={tags}
+          onAdd={addTag}
+          placeholder="Add another tag to narrow the search…"
+        />
+        <SortControl value={sort} onChange={setSort} />
+      </div>
 
       <div className="tag-search__body">
         <aside className="app__sidebar">

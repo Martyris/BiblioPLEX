@@ -97,8 +97,12 @@ export default function TypeSearchView({
         <button className="back-link back-link--nav" onClick={onBack}>
           ← Back to deck
         </button>
-        <h2 className="set-detail__title tag-search__title">Search by Type</h2>
-        <SortControl value={sort} onChange={setSort} />
+        <h2 className="set-detail__title tag-search__title">
+          Search by Type
+          {colorIdentity && (
+            <span className="tag-search__identity-hint">Results filtered to your color identity automatically.</span>
+          )}
+        </h2>
       </div>
 
       <ul className="tag-row card-tags__draft-row">
@@ -116,12 +120,15 @@ export default function TypeSearchView({
           </li>
         ))}
       </ul>
-      <TagAutocomplete
-        availableTags={availableTypes}
-        excludeTags={terms}
-        onAdd={addTerm}
-        placeholder="Add another type or subtype to narrow the search…"
-      />
+      <div className="app__results-toolbar tag-search__query-row">
+        <TagAutocomplete
+          availableTags={availableTypes}
+          excludeTags={terms}
+          onAdd={addTerm}
+          placeholder="Add another type or subtype to narrow the search…"
+        />
+        <SortControl value={sort} onChange={setSort} />
+      </div>
 
       <div className="tag-search__body">
         <aside className="app__sidebar">

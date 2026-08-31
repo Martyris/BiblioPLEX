@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { isError, type ScryfallCard, type ScryfallRuling, type ScryfallRulingsResult, type ScryfallSearchResult } from '../types'
 import PrintingSelect from './PrintingSelect'
 import CardTagsPanel from './CardTagsPanel'
@@ -27,6 +28,13 @@ export interface DeckMode {
   userTags?: string[]
   onAddUserTag?: (tag: string) => void
   onRemoveUserTag?: (tag: string) => void
+  // A user-uploaded image standing in for this card's real art, scoped to one deck (see
+  // StoredDeck.proxyArtByKey) — a cosmetic "skin," not a printing change. `back` only matters
+  // for a transform/MDFC card (isFlippable below) — flipping switches which one shows, same as
+  // it switches which real face shows. Omit onSetProxyArt to hide the button entirely (e.g.
+  // outside deck-editing contexts, same as the tag props above).
+  proxyArt?: { front: string; back?: string }
+  onSetProxyArt?: (face: 'front' | 'back', dataUrl: string | null) => void
 }
 
 interface Props {
@@ -59,9 +67,54 @@ interface Props {
 
 const LEGALITY_ORDER = ['standard', 'pioneer', 'modern', 'legacy', 'vintage', 'commander', 'pauper']
 const FLIP_HALF_DURATION_MS = 150
+// A sanity check on the file the user picks, before it's ever read/rescaled — rejects something
+// wildly oversized without bothering to decode it. The actual stored size is governed by
+// PROXY_ART_MAX_DIMENSION + JPEG re-encoding below instead, which brings basically any photo
+// down to well under a megabyte regardless of how large the original file was.
+const MAX_PROXY_ART_INPUT_BYTES = 10 * 1024 * 1024
+// Longest side, in px, after rescaling — comfortably covers every size this app ever actually
+// displays a card image at (the card-detail view's own image is smaller than this), so there's
+// no visible quality loss, while keeping what's stored inline in decks.json (see
+// StoredDeck.proxyArtByKey) reasonable regardless of how large the source photo was.
+const PROXY_ART_MAX_DIMENSION = 1000
 
 function formatLegality(status: string): string {
   return status.replace('_', ' ')
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read that file.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not decode that image.'))
+    img.src = src
+  })
+}
+
+// Downscales to PROXY_ART_MAX_DIMENSION on the longest side (a no-op if the source is already
+// smaller) and re-encodes as JPEG — a proxy art upload can now be up to 10MB going in, but
+// nothing card-art-sized ever needs to stay anywhere near that once stored inline in decks.json.
+// Falls back to the untouched original data URL if canvas 2D somehow isn't available.
+async function rescaleImageFile(file: File): Promise<string> {
+  const original = await readFileAsDataUrl(file)
+  const img = await loadImageElement(original)
+  const scale = Math.min(1, PROXY_ART_MAX_DIMENSION / Math.max(img.width, img.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(img.width * scale))
+  canvas.height = Math.max(1, Math.round(img.height * scale))
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return original
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/jpeg', 0.85)
 }
 
 // Renders a type line ("Legendary Creature — Jellyfish Hydra Beast") as the exact same text,
@@ -107,6 +160,10 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
   const [faceIndex, setFaceIndex] = useState(0)
   const [isFlipping, setIsFlipping] = useState(false)
   const skipNextPrintingChange = useRef(true)
+  const [proxyArtModalOpen, setProxyArtModalOpen] = useState(false)
+  const [proxyArtError, setProxyArtError] = useState<string | null>(null)
+  const [proxyArtSaving, setProxyArtSaving] = useState(false)
+  const proxyArtFileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -215,7 +272,12 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
   }, [active.id])
 
   const localizedFace = localizedArt?.card_faces?.[faceIndex]
+  // A back-face proxy only ever applies while actually showing the back (faceIndex 1) — flipping
+  // a two-sided card with only a front skin set correctly falls through to that face's real art
+  // instead of incorrectly re-showing the front's skin on the back.
+  const proxyArtForFace = faceIndex === 1 ? deckMode?.proxyArt?.back : deckMode?.proxyArt?.front
   const image =
+    proxyArtForFace ??
     localizedFace?.image_uris?.large ??
     currentFace?.image_uris?.large ??
     localizedArt?.image_uris?.large ??
@@ -276,6 +338,26 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
     onClose()
   }
 
+  async function handleProxyArtFile(file: File): Promise<void> {
+    if (file.size > MAX_PROXY_ART_INPUT_BYTES) {
+      setProxyArtError('Image is too large — please use one under 10 MB.')
+      return
+    }
+    setProxyArtSaving(true)
+    setProxyArtError(null)
+    try {
+      const dataUrl = await rescaleImageFile(file)
+      // Whichever face is currently showing is the one being skinned — flip first, then upload,
+      // to set the other side.
+      deckMode?.onSetProxyArt?.(faceIndex === 1 ? 'back' : 'front', dataUrl)
+      setProxyArtModalOpen(false)
+    } catch (err) {
+      setProxyArtError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setProxyArtSaving(false)
+    }
+  }
+
   return (
     <div className="card-detail-overlay" onClick={onClose}>
       <div className="card-detail" onClick={(e) => e.stopPropagation()}>
@@ -295,6 +377,22 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
               ⟲ Flip
             </button>
           )}
+          {deckMode?.onSetProxyArt &&
+            // Two-sided cards get their own art per face — flip to the side you want, then set
+            // (or discard) that side's skin specifically; the label says which side is current
+            // so it's never ambiguous which face an upload is about to replace.
+            (proxyArtForFace ? (
+              <button
+                className="card-detail__proxy-art"
+                onClick={() => deckMode.onSetProxyArt?.(faceIndex === 1 ? 'back' : 'front', null)}
+              >
+                Discard Proxy Art{isFlippable ? (faceIndex === 1 ? ' (Back)' : ' (Front)') : ''}
+              </button>
+            ) : (
+              <button className="card-detail__proxy-art" onClick={() => setProxyArtModalOpen(true)}>
+                Use Proxy Art{isFlippable ? (faceIndex === 1 ? ' (Back)' : ' (Front)') : ''}
+              </button>
+            ))}
           {deckMode?.onRemove && (
             <button className="card-detail__remove" onClick={handleRemove}>
               {deckMode.removeLabel ?? 'Remove from Deck'}
@@ -415,6 +513,42 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
           </a>
         </div>
       </div>
+
+      {proxyArtModalOpen &&
+        createPortal(
+          <div className="card-detail-overlay" onClick={(e) => { e.stopPropagation(); setProxyArtModalOpen(false) }}>
+            <div className="account-modal account-modal--confirm" onClick={(e) => e.stopPropagation()}>
+              <button className="card-detail__close" onClick={() => setProxyArtModalOpen(false)}>
+                ×
+              </button>
+              <h3 className="section-heading" style={{ marginTop: 0 }}>
+                Use Proxy Art{isFlippable ? (faceIndex === 1 ? ' — Back' : ' — Front') : ''}
+              </h3>
+              <p className="app__hint">
+                Shows your own image instead of this card's real art, in this deck only — the card underneath is
+                completely unchanged (same name, rules text, and legality).
+                {isFlippable && ' Flip the card first to set the other side separately.'} Up to 10MB — larger images
+                are automatically resized down.
+              </p>
+              <input
+                ref={proxyArtFileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleProxyArtFile(file)
+                  e.target.value = ''
+                }}
+              />
+              <button className="secondary-button" onClick={() => proxyArtFileInputRef.current?.click()} disabled={proxyArtSaving}>
+                {proxyArtSaving ? 'Uploading…' : 'Choose Image'}
+              </button>
+              {proxyArtError && <p className="app__error">{proxyArtError}</p>}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

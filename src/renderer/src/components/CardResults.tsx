@@ -1,6 +1,8 @@
+import { useMemo } from 'react'
 import CardTile from './CardTile'
 import type { SortOption } from './SortControl'
 import { useCardResults, type CardResultsState } from '../useCardResults'
+import { isOutsideColorIdentity } from '../deckLogic'
 import type { ScryfallCard } from '../types'
 
 interface Props {
@@ -16,6 +18,11 @@ interface Props {
   getBadge?: (card: ScryfallCard) => boolean
   // Marks a result already on the Card Pool or Want list, independent of the deck badge.
   getMarker?: (card: ScryfallCard) => 'want' | 'pool' | undefined
+  // The deck's commander(s) color identity — when supplied, results within it are shown first
+  // (matches outside it follow, in the same relative order the search itself returned them in),
+  // and out-of-identity tiles are dimmed/grayscaled (see CardTile's outsideIdentity prop).
+  // Omit for a search context with no deck to be "in/out of identity" relative to.
+  colorIdentity?: string[]
   // The plain free-text the user typed, before filters/exclusion terms were mixed in —
   // enables the foreign-language-name fallback (see useCardResults). Omit where there's no
   // free-text box (e.g. a set browser with no search input).
@@ -35,12 +42,26 @@ export default function CardResults({
   badgeLabel,
   getBadge,
   getMarker,
+  colorIdentity,
   rawText,
   results
 }: Props) {
   const ownResults = useCardResults(results ? '' : query, sort, results ? '' : rawText)
-  const { cards, total, hasMore, loading, loadingMore, error, loadMore } = results ?? ownResults
+  const { cards: rawCards, total, hasMore, loading, loadingMore, error, loadMore } = results ?? ownResults
   const isEmpty = query.trim() === ''
+
+  // Stable partition, not a re-sort — within "in identity" and "outside identity" the search's
+  // own order (relevance, EDHREC rank, whatever `sort` picked) is preserved; only which of the
+  // two groups a card lands in changes anything.
+  const cards = useMemo(() => {
+    if (!colorIdentity) return rawCards
+    const inIdentity: ScryfallCard[] = []
+    const outsideIdentity: ScryfallCard[] = []
+    for (const card of rawCards) {
+      ;(isOutsideColorIdentity(card, colorIdentity) ? outsideIdentity : inIdentity).push(card)
+    }
+    return [...inIdentity, ...outsideIdentity]
+  }, [rawCards, colorIdentity])
 
   return (
     <>
@@ -60,6 +81,7 @@ export default function CardResults({
             badgeLabel={badgeLabel}
             showBadge={getBadge?.(card)}
             marker={getMarker?.(card)}
+            outsideIdentity={colorIdentity ? isOutsideColorIdentity(card, colorIdentity) : undefined}
           />
         ))}
       </div>

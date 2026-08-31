@@ -27,6 +27,14 @@ interface Props {
   // its main "Hydra" group. Faded by default (see .card-tile.is-ghost in styles.css), full
   // opacity on hover so the card is still easy to actually look at.
   isGhost?: boolean
+  // A search result that doesn't fit the deck's commander color identity — grayed out and
+  // dimmed (see .card-tile.is-outside-identity in styles.css) so in-identity results read as
+  // the "real" matches at a glance, full color/opacity on hover to still look the card over.
+  outsideIdentity?: boolean
+  // A user-uploaded image to show instead of this card's real art, scoped to one deck (see
+  // StoredDeck.proxyArtByKey and CardDetail's "Use Proxy Art") — a cosmetic skin only; the
+  // card's actual data/printing is completely untouched.
+  proxyArtUrl?: string
 }
 
 const ILLEGAL_LABELS: Record<'color-identity' | 'banned', string> = {
@@ -65,9 +73,11 @@ export default function CardTile({
   isFoil,
   illegalReason,
   isConsidering,
-  isGhost
+  isGhost,
+  outsideIdentity,
+  proxyArtUrl
 }: Props) {
-  const image = card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal
+  const image = proxyArtUrl ?? card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal
   const markerClass = marker === 'want' ? 'is-wanted' : marker === 'pool' ? 'is-pooled' : ''
   const shouldShowBadge = showBadge ?? inDeck
   // Unique per instance — SVG mask/filter ids are global to the document, and multiple ghost
@@ -84,7 +94,7 @@ export default function CardTile({
 
   return (
     <button
-      className={`card-tile ${inDeck ? 'is-in-deck' : ''} ${markerClass} ${isFoil ? 'is-foil' : ''} ${isConsidering ? 'is-considering' : ''} ${isGhost ? 'is-ghost' : ''}`}
+      className={`card-tile ${inDeck ? 'is-in-deck' : ''} ${markerClass} ${isFoil ? 'is-foil' : ''} ${isConsidering ? 'is-considering' : ''} ${isGhost ? 'is-ghost' : ''} ${outsideIdentity ? 'is-outside-identity' : ''}`}
       onClick={() => onSelect(card)}
       onContextMenu={(e) => onContextMenu?.(card, e)}
       title={card.name}
