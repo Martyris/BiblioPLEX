@@ -108,7 +108,7 @@ if (!is.dev) {
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1450,
+    width: 1600,
     height: 816,
     show: false,
     autoHideMenuBar: true,
