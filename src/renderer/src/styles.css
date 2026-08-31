@@ -1530,18 +1530,39 @@ body {
 }
 
 .set-year-group__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   margin: 0;
+  padding: 0 0 6px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
   font-size: 15px;
   font-weight: 700;
   color: var(--text);
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--border);
+  text-align: left;
+  cursor: pointer;
 }
 
 .set-year-group__count {
   font-weight: 400;
   color: var(--muted);
   font-size: 13px;
+}
+
+.set-year-group__chevron {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.set-year-group__heading.is-collapsed .set-year-group__chevron {
+  transform: rotate(-90deg);
 }
 
 .set-grid {
@@ -1928,6 +1949,15 @@ body {
 
 .context-menu button:hover {
   background: var(--border);
+}
+
+.context-menu button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.context-menu button:disabled:hover {
+  background: none;
 }
 
 /* Deck analytics */
@@ -4851,6 +4881,30 @@ body {
   height: 16px;
 }
 
+.basic-land-modal {
+  max-width: 640px;
+}
+
+.basic-land-modal__grid {
+  grid-template-columns: repeat(5, 1fr);
+  max-height: 55vh;
+  margin-top: 12px;
+}
+
+.basic-land-modal__instance-badge {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.basic-land-modal__instance.is-snow .basic-land-modal__instance-badge {
+  color: #7fd6ff;
+  font-weight: 600;
+}
+
+.basic-land-modal__instance.is-snow {
+  border-color: color-mix(in srgb, #7fd6ff 50%, transparent);
+}
+
 .deck-builder__add-cards-row {
   display: flex;
   align-items: flex-start;
@@ -5287,6 +5341,33 @@ body {
 .record-control__value {
   text-align: center;
   min-width: 48px;
+}
+
+.record-control__pip-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  padding: 2px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.record-control__pip-button:hover {
+  background: var(--border);
+}
+
+.deck-builder__basic-lands-heading-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 28px 0 12px;
+}
+
+.deck-builder__basic-lands-heading-row .section-heading {
+  margin: 0;
 }
 
 .record-control__count {

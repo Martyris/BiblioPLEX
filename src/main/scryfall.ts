@@ -72,6 +72,62 @@ function toScryfallError(err: unknown): ScryfallError {
   return { error: true, status: timedOut ? 408 : 0, details: timedOut ? 'Request timed out' : message }
 }
 
+// Most multi-faced layouts (transform, modal_dfc, adventure, split, flip, meld) still mirror
+// the front face's summary fields at the top level (oracle_id, cmc, type_line, mana_cost,
+// oracle_text, colors, power, toughness, image_uris) — every place in this app that reads
+// `card.oracle_id`/`card.cmc`/etc. directly relies on that, the same way it would for any
+// single-faced card. The one layout that doesn't is "reversible_card" (a bonus alternate-art
+// back treatment, not a second real game object — e.g. Tarkir: Dragonstorm's showcase prints):
+// Scryfall omits ALL of those top-level fields for it, and a missing oracle_id in particular
+// reached code (both here and in the renderer) that assumes it's always a string, crashing the
+// app outright the moment a deck held one of these printings — see the bug report: picking
+// Marang River Regent // Coil and Catch's reversible printing broke the app for good until
+// decks.json was hand-edited. Backfilling from card_faces[0] here, in the one place every card
+// object passes through on its way from Scryfall, means nothing downstream needs to know this
+// layout is unusual at all.
+const FACE_BACKFILL_FIELDS = [
+  'oracle_id',
+  'cmc',
+  'type_line',
+  'mana_cost',
+  'oracle_text',
+  'colors',
+  'power',
+  'toughness',
+  'image_uris'
+] as const
+
+export function normalizeCard(card: Record<string, unknown>): Record<string, unknown> {
+  const faces = card.card_faces
+  if (!Array.isArray(faces) || faces.length === 0 || typeof faces[0] !== 'object' || faces[0] === null) return card
+  const front = faces[0] as Record<string, unknown>
+  const patch: Record<string, unknown> = {}
+  let changed = false
+  for (const field of FACE_BACKFILL_FIELDS) {
+    if (card[field] === undefined && front[field] !== undefined) {
+      patch[field] = front[field]
+      changed = true
+    }
+  }
+  return changed ? { ...card, ...patch } : card
+}
+
+// Applied to every response body this file returns — cheap to check and a no-op for anything
+// that isn't card-shaped (catalogs, rulings lists, sets), since only objects with a real
+// `card_faces` array ever get touched.
+function normalizeCardData(body: unknown): unknown {
+  if (!body || typeof body !== 'object') return body
+  const obj = body as Record<string, unknown>
+  if (obj.object === 'list' && Array.isArray(obj.data)) {
+    return {
+      ...obj,
+      data: obj.data.map((c) => (c && typeof c === 'object' && 'card_faces' in c ? normalizeCard(c as Record<string, unknown>) : c))
+    }
+  }
+  if ('card_faces' in obj) return normalizeCard(obj)
+  return body
+}
+
 async function getJson(url: string, init?: RequestInit): Promise<unknown> {
   try {
     const res = await throttledFetch(url, init)
@@ -80,7 +136,7 @@ async function getJson(url: string, init?: RequestInit): Promise<unknown> {
     if (!res.ok) {
       return { error: true, status: res.status, details: body?.details ?? 'Unknown error' } as ScryfallError
     }
-    return body
+    return normalizeCardData(body)
   } catch (err) {
     return toScryfallError(err)
   }

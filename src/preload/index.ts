@@ -33,6 +33,7 @@ interface DeckPatch {
   cardPoolIds?: string[]
   wantIds?: string[]
   foilIds?: string[]
+  flippedIds?: string[]
   consideringIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
   archetypeKey?: string

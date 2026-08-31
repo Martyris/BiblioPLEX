@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { isError, type ScryfallCard, type ScryfallRuling, type ScryfallRulingsResult, type ScryfallSearchResult } from '../types'
-import { pickPreferredPrinting } from '../printings'
 import PrintingSelect from './PrintingSelect'
 import CardTagsPanel from './CardTagsPanel'
 import { getLocale } from '../i18n'
@@ -16,6 +15,12 @@ export interface DeckMode {
   // onToggleFoil to hide the toggle entirely (e.g. for a plain, non-deck card view).
   isFoil?: boolean
   onToggleFoil?: () => void
+  // Whether *this specific slot* should open showing its back/secondary face (transform,
+  // modal_dfc, or a reversible_card printing) instead of the front — remembered the same way a
+  // foil choice is. Omit onToggleFlip to make flipping ephemeral (resets next time this card is
+  // opened), e.g. outside deck-editing contexts.
+  isFlipped?: boolean
+  onToggleFlip?: () => void
   // This deck's own tag additions for this exact card (see StoredDeck.userCardTags) — omit all
   // three together outside deck-editing contexts (Search, Sets, Commander, Precons, Playtest),
   // where there's no specific deck to scope a tag addition to.
@@ -140,14 +145,6 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
           setPrintings(all)
           nextUrl = page.has_more && page.next_page ? page.next_page : null
         }
-        if (cancelled || all.length === 0) return
-
-        // In deck mode, `card` IS the printing already in the deck — show that exact one
-        // rather than auto-jumping to "latest normal art".
-        if (!deckMode) {
-          const preferred = pickPreferredPrinting(all)
-          if (preferred) setActiveId(preferred.id)
-        }
       } catch {
         // Network hiccup fetching alternate printings — keep showing the originally
         // selected card rather than blocking the whole detail view.
@@ -163,10 +160,15 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card])
 
-  // A different printing may be a different layout entirely — always land on the front face.
+  // A different printing may be a different layout entirely — land on whichever face this deck
+  // slot last remembered (front, if there's no deckMode to remember one, or none was saved yet).
   useEffect(() => {
-    setFaceIndex(0)
+    setFaceIndex(deckMode?.isFlipped ? 1 : 0)
     setIsFlipping(false)
+    // Deliberately NOT reacting to deckMode.isFlipped changing on its own — that happens when
+    // this same effect's own flip click persists a toggle, and re-running here would immediately
+    // fight it back to the pre-toggle face.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
 
   // Tell the deck builder whenever the user picks a different printing from the dropdown
@@ -265,6 +267,7 @@ export default function CardDetail({ card, onClose, deckMode, minimal, equippedW
     window.setTimeout(() => {
       setFaceIndex((i) => (i === 0 ? 1 : 0))
       setIsFlipping(false)
+      deckMode?.onToggleFlip?.()
     }, FLIP_HALF_DURATION_MS)
   }
 

@@ -8,6 +8,7 @@ import PlaytestGoldfishView from './PlaytestGoldfishView'
 import ColorPips from './ColorPips'
 import TagSearchView from './TagSearchView'
 import TypeSearchView from './TypeSearchView'
+import BasicLandModal from './BasicLandModal'
 import DeckAnalyticsView from './DeckAnalyticsView'
 import DeckScoreView from './DeckScoreView'
 import DeckCombosView from './DeckCombosView'
@@ -28,6 +29,7 @@ import {
   groupDeckCards,
   isBasicLand,
   primarySubtype,
+  snowNameFor,
   swapPrinting,
   swapPrintingAtOccurrence,
   toggleCardInDeck,
@@ -146,6 +148,14 @@ type View =
 
 export default function DeckBuilder({ deckId, onBack }: Props) {
   const [storedDeck, setStoredDeck] = useState<StoredDeck | null>(null)
+  // Mirrors storedDeck, but updated synchronously the instant persist() computes a new deck —
+  // not on the next render like the state variable is. Clicking through several basic lands
+  // in a row (or anything else calling persist() back-to-back) could otherwise have a second
+  // call still reading the pre-first-click storedDeck from its own stale render closure,
+  // building its own cardIds off that stale array, and silently clobbering the first click's
+  // change when it saved. Every cardIds-mutating function below reads this ref, not the state
+  // variable, as its base.
+  const storedDeckRef = useRef<StoredDeck | null>(null)
   const [cardsById, setCardsById] = useState<Record<string, ScryfallCard>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -302,6 +312,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         return
       }
       const deck = deckResult as StoredDeck
+      storedDeckRef.current = deck
       setStoredDeck(deck)
 
       const ids = [deck.commanderId, ...(deck.partnerCommanderId ? [deck.partnerCommanderId] : []), ...deck.cardIds]
@@ -364,6 +375,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   )
   const categoryGroups = useMemo(() => groupDeckCards(deckCards, deckGroupMode), [deckCards, deckGroupMode])
   const basicLandCounts = useMemo(() => countBasicLands(deckCards), [deckCards])
+  const [basicPipMenu, setBasicPipMenu] = useState<{ name: string; x: number; y: number } | null>(null)
+  const [basicLandModal, setBasicLandModal] = useState<
+    { mode: 'snow'; name: string } | { mode: 'printing'; name: string; printingTarget: 'regular' | 'snow' } | null
+  >(null)
   const deckColorIdentity = useMemo(() => {
     const colors = new Set<string>()
     for (const c of commander?.color_identity ?? []) colors.add(c)
@@ -371,6 +386,51 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     return [...colors]
   }, [commander, partnerCommander])
   const visibleBasicLandNames = useMemo(() => basicLandNamesForIdentity(deckColorIdentity), [deckColorIdentity])
+  // Resolved default printing per exact card name (regular AND Snow-Covered, for every color in
+  // the deck's identity) — the same commander-set / sibling-set / closest-release-date search
+  // addBasicLand already used, just run for every relevant name up front instead of only the
+  // one the user happens to click. Converting to Snow for the first time then reads straight
+  // from here instead of waiting on a live search at click time.
+  const [preloadedBasicPrintings, setPreloadedBasicPrintings] = useState<Record<string, ScryfallCard>>({})
+
+  useEffect(() => {
+    if (!commander) return
+    let cancelled = false
+
+    async function preload(): Promise<void> {
+      const names = visibleBasicLandNames.flatMap((name) => [name, snowNameFor(name)])
+      const results = await Promise.all(
+        names.map(async (name) => {
+          // A copy already in the deck (whatever art it happens to be) beats spending a search
+          // resolving a "default" that would just be overridden by that existing sample anyway.
+          const existing = storedDeckRef.current?.cardIds.map((id) => cardsById[id]).find((c) => c?.name === name)
+          return existing ?? findDefaultBasicPrinting(name)
+        })
+      )
+      if (cancelled) return
+      const found = results.filter((c): c is ScryfallCard => Boolean(c))
+      if (found.length === 0) return
+      setPreloadedBasicPrintings((prev) => {
+        const next = { ...prev }
+        for (const c of found) next[c.name] = c
+        return next
+      })
+      setCardsById((prev) => {
+        const next = { ...prev }
+        for (const c of found) if (!next[c.id]) next[c.id] = c
+        return next
+      })
+    }
+
+    preload()
+    return () => {
+      cancelled = true
+    }
+    // Deliberately keyed off just the commander and the set of relevant names — re-running this
+    // on every cardsById/storedDeck change (which the lookups inside DO read) would mean firing
+    // it again after every single card add/remove in the deck, not just once per deck opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commander?.oracle_id, visibleBasicLandNames])
 
   // Card Pool and Want ids aren't preloaded with the rest of the deck (they're staging lists,
   // not part of cardIds) — fetch whichever of them aren't already known whenever they change.
@@ -413,6 +473,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   const wantOracleIds = useMemo(() => new Set(wantCards.map((c) => c.oracle_id)), [wantCards])
   const cardPoolOracleIds = useMemo(() => new Set(cardPoolCards.map((c) => c.oracle_id)), [cardPoolCards])
   const foilIdSet = useMemo(() => new Set(storedDeck?.foilIds ?? []), [storedDeck?.foilIds])
+  const flippedIdSet = useMemo(() => new Set(storedDeck?.flippedIds ?? []), [storedDeck?.flippedIds])
   const consideringIdSet = useMemo(() => new Set(storedDeck?.consideringIds ?? []), [storedDeck?.consideringIds])
 
   // "On Deck" is its own bucket ahead of the type categories — a pool card already in the
@@ -466,6 +527,13 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   async function toggleFoil(key: string): Promise<void> {
     if (!storedDeck) return
     await persist({ foilIds: toggleIdInList(storedDeck.foilIds, key) })
+  }
+
+  // Same key scheme as foilKeyFor — remembers which face (front/back) a deck slot was last
+  // showing, for transform/modal_dfc/reversible_card printings.
+  async function toggleFlipped(key: string): Promise<void> {
+    if (!storedDeck) return
+    await persist({ flippedIds: toggleIdInList(storedDeck.flippedIds, key) })
   }
 
   // Keyed by plain card id, not by occurrence — unlike foil status, "considering this for
@@ -635,15 +703,19 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     cardPoolIds?: string[]
     wantIds?: string[]
     foilIds?: string[]
+    flippedIds?: string[]
     consideringIds?: string[]
     lastScore?: StoredDeck['lastScore']
     archetypeKey?: string
     logicFile?: StoredDeck['logicFile']
     userCardTags?: Record<string, string[]>
   }): Promise<void> {
-    if (!storedDeck) return
-    setStoredDeck({ ...storedDeck, ...patch })
-    await window.api.updateDeck(storedDeck.id, patch)
+    const base = storedDeckRef.current
+    if (!base) return
+    const updated = { ...base, ...patch }
+    storedDeckRef.current = updated
+    setStoredDeck(updated)
+    await window.api.updateDeck(updated.id, patch)
   }
 
   // Per-deck card tag additions (see StoredDeck.userCardTags) — a card can function differently
@@ -1141,8 +1213,8 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   // Only ever called for basic lands (see addBasicLand below) — never touches Card Pool/Want,
   // since tracking basics there is meaningless (you always effectively have unlimited basics).
   async function addCardIdToDeck(id: string): Promise<void> {
-    if (!storedDeck) return
-    await persist({ cardIds: [...storedDeck.cardIds, id] })
+    if (!storedDeckRef.current) return
+    await persist({ cardIds: [...storedDeckRef.current.cardIds, id] })
   }
 
   // First copy of a given basic land name in this deck: prefer a printing from the
@@ -1203,28 +1275,65 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   }
 
   async function addBasicLand(name: string): Promise<void> {
-    if (!storedDeck) return
+    if (!storedDeckRef.current) return
     const existing = basicLandCounts.get(name)
     if (existing) {
       await addCardIdToDeck(existing.sampleId)
       return
     }
-    const found = await findDefaultBasicPrinting(name)
+    const found = preloadedBasicPrintings[name] ?? (await findDefaultBasicPrinting(name))
     if (!found) return
     setCardsById((prev) => ({ ...prev, [found.id]: found }))
     await addCardIdToDeck(found.id)
   }
 
   async function removeBasicLand(name: string): Promise<void> {
-    if (!storedDeck) return
-    const ids = [...storedDeck.cardIds]
+    if (!storedDeckRef.current) return
+    // The stepper's own count is regular+snow combined (see combinedBasicCount) — "-" removes
+    // whichever flavor is actually there, snow included, rather than only ever matching the
+    // plain name and silently refusing to go below however many snow copies happen to exist.
+    const snowName = snowNameFor(name)
+    const ids = [...storedDeckRef.current.cardIds]
     for (let i = ids.length - 1; i >= 0; i--) {
       const card = cardsById[ids[i]]
-      if (card && card.name === name) {
+      if (card && (card.name === name || card.name === snowName)) {
         ids.splice(i, 1)
         break
       }
     }
+    await persist({ cardIds: ids })
+  }
+
+  // Flips one specific copy (by its index in cardIds, not by id — several copies can share the
+  // same printing id) between a basic land and its Snow-Covered counterpart. Reuses whichever
+  // printing is already in the deck for the target flavor (so every Snow-Covered Island this
+  // deck has shares the same art) before falling back to a fresh search, the same optimization
+  // addBasicLand already relies on for the very first copy of a name. Reads/writes cardIds via
+  // storedDeckRef (not the storedDeck state variable) so clicking through several conversions
+  // in a row — each one calling this again before React has re-rendered from the previous
+  // call's persist() — builds each new array on top of the PREVIOUS click's result instead of
+  // a shared stale snapshot, which was silently rolling earlier clicks back.
+  async function toggleBasicSnowAt(index: number, targetName: string): Promise<void> {
+    if (!storedDeckRef.current) return
+    const existing =
+      storedDeckRef.current.cardIds.map((id) => cardsById[id]).find((c) => c?.name === targetName) ??
+      preloadedBasicPrintings[targetName]
+    const target = existing ?? (await findDefaultBasicPrinting(targetName))
+    if (!target) return
+    if (!cardsById[target.id]) setCardsById((prev) => ({ ...prev, [target.id]: target }))
+    if (!storedDeckRef.current) return
+    const ids = [...storedDeckRef.current.cardIds]
+    ids[index] = target.id
+    await persist({ cardIds: ids })
+  }
+
+  // Replaces every copy sharing this exact name (regardless of which printing each one
+  // currently is) with one chosen printing — "changing printings should change all printings,"
+  // not just the first copy the way a normal per-card printing swap would.
+  async function changeAllBasicPrintings(name: string, newPrinting: ScryfallCard): Promise<void> {
+    if (!storedDeckRef.current) return
+    if (!cardsById[newPrinting.id]) setCardsById((prev) => ({ ...prev, [newPrinting.id]: newPrinting }))
+    const ids = storedDeckRef.current.cardIds.map((id) => (cardsById[id]?.name === name ? newPrinting.id : id))
     await persist({ cardIds: ids })
   }
 
@@ -1864,10 +1973,15 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
       )}
 
-      <h3 className="section-heading">Basic Lands</h3>
+      <div className="deck-builder__basic-lands-heading-row">
+        <h3 className="section-heading">Basic Lands</h3>
+        <span className="app__hint">Click color symbol to change land settings.</span>
+      </div>
       <div className="basic-land-row">
         {visibleBasicLandNames.map((name) => {
-          const count = basicLandCounts.get(name)?.count ?? 0
+          // Regular + Snow-Covered combined — converting a copy to snow (or back) shouldn't
+          // make it vanish from this count, just change which flavor it's counted as.
+          const count = (basicLandCounts.get(name)?.count ?? 0) + (basicLandCounts.get(snowNameFor(name))?.count ?? 0)
           const color = BASIC_LAND_COLOR[name]
           return (
             <div key={name} className="record-control">
@@ -1880,7 +1994,14 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               </button>
               <div className="record-control__value">
                 <span className="record-control__count">{count}</span>
-                <ColorPips colors={color ? [color] : []} size={18} />
+                <button
+                  type="button"
+                  className="record-control__pip-button"
+                  title="Click to change land settings"
+                  onClick={(e) => setBasicPipMenu({ name, x: e.clientX, y: e.clientY })}
+                >
+                  <ColorPips colors={color ? [color] : []} size={18} />
+                </button>
               </div>
               <button className="record-button record-button--plus" onClick={() => addBasicLand(name)}>
                 +
@@ -2433,6 +2554,70 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         />
       )}
 
+      {basicPipMenu &&
+        (() => {
+          const snowName = snowNameFor(basicPipMenu.name)
+          const regularCount = basicLandCounts.get(basicPipMenu.name)?.count ?? 0
+          const snowCount = basicLandCounts.get(snowName)?.count ?? 0
+          return (
+            <CardContextMenu
+              x={basicPipMenu.x}
+              y={basicPipMenu.y}
+              onClose={() => setBasicPipMenu(null)}
+              actions={[
+                {
+                  label: 'Change for Snow Lands',
+                  onSelect: () => {
+                    setBasicLandModal({ mode: 'snow', name: basicPipMenu.name })
+                    setBasicPipMenu(null)
+                  }
+                },
+                {
+                  label: 'Change Printings for All Basics',
+                  disabled: regularCount === 0,
+                  title: regularCount === 0 ? `No ${basicPipMenu.name} in this deck yet` : undefined,
+                  onSelect: () => {
+                    setBasicLandModal({ mode: 'printing', name: basicPipMenu.name, printingTarget: 'regular' })
+                    setBasicPipMenu(null)
+                  }
+                },
+                {
+                  label: 'Change Printings for All Snow Basics',
+                  disabled: snowCount === 0,
+                  title: snowCount === 0 ? `No Snow-Covered ${basicPipMenu.name} in this deck yet` : undefined,
+                  onSelect: () => {
+                    setBasicLandModal({ mode: 'printing', name: basicPipMenu.name, printingTarget: 'snow' })
+                    setBasicPipMenu(null)
+                  }
+                }
+              ]}
+            />
+          )
+        })()}
+
+      {basicLandModal && storedDeck && (
+        <BasicLandModal
+          mode={basicLandModal.mode}
+          name={basicLandModal.name}
+          printingTarget={basicLandModal.mode === 'printing' ? basicLandModal.printingTarget : undefined}
+          deckCardIds={storedDeck.cardIds}
+          cardsById={cardsById}
+          onToggleInstance={(index) => {
+            const current = cardsById[storedDeck.cardIds[index]]
+            if (!current) return
+            const target = current.name === basicLandModal.name ? snowNameFor(basicLandModal.name) : basicLandModal.name
+            toggleBasicSnowAt(index, target)
+          }}
+          onApplyPrinting={(card) => {
+            if (basicLandModal.mode !== 'printing') return
+            const name = basicLandModal.printingTarget === 'snow' ? snowNameFor(basicLandModal.name) : basicLandModal.name
+            changeAllBasicPrintings(name, card)
+            setBasicLandModal(null)
+          }}
+          onClose={() => setBasicLandModal(null)}
+        />
+      )}
+
       {viewingCard && viewingKind === 'token' && (
         <CardDetail
           card={viewingCard}
@@ -2468,6 +2653,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
             },
+            isFlipped: viewingSlotId ? flippedIdSet.has(viewingSlotId) : false,
+            onToggleFlip: () => {
+              if (viewingSlotId) toggleFlipped(viewingSlotId)
+            },
             ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
@@ -2487,6 +2676,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
+            },
+            isFlipped: viewingSlotId ? flippedIdSet.has(viewingSlotId) : false,
+            onToggleFlip: () => {
+              if (viewingSlotId) toggleFlipped(viewingSlotId)
             },
             ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
@@ -2512,6 +2705,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             isFoil: viewingSlotId ? foilIdSet.has(foilKeyFor(viewingSlotId, viewingSlotOccurrence)) : false,
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(foilKeyFor(viewingSlotId, viewingSlotOccurrence))
+            },
+            isFlipped: viewingSlotId ? flippedIdSet.has(foilKeyFor(viewingSlotId, viewingSlotOccurrence)) : false,
+            onToggleFlip: () => {
+              if (viewingSlotId) toggleFlipped(foilKeyFor(viewingSlotId, viewingSlotOccurrence))
             },
             ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
@@ -2539,6 +2736,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             onToggleFoil: () => {
               if (viewingSlotId) toggleFoil(viewingSlotId)
             },
+            isFlipped: viewingSlotId ? flippedIdSet.has(viewingSlotId) : false,
+            onToggleFlip: () => {
+              if (viewingSlotId) toggleFlipped(viewingSlotId)
+            },
             ...userTagDeckModeProps(viewingCard.oracle_id)
           }}
         />
@@ -2560,6 +2761,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
             removeLabel: 'Remove from Want',
             onPrintingChange: (newCard) => {
               if (viewingSlotId) handleWantPrintingChange(viewingSlotId, newCard)
+            },
+            isFlipped: viewingSlotId ? flippedIdSet.has(viewingSlotId) : false,
+            onToggleFlip: () => {
+              if (viewingSlotId) toggleFlipped(viewingSlotId)
             },
             isFoil: viewingSlotId ? foilIdSet.has(viewingSlotId) : false,
             onToggleFoil: () => {

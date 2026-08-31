@@ -1,6 +1,6 @@
 {
   "name": "biblioplex",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "BiblioPLEX — MTG deck building, card info, and recommendations desktop app",
   "main": "./out/main/index.js",
   "author": "Martyris",

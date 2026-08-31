@@ -60,12 +60,17 @@ function setTypeLabel(setType: string): string {
     .join(' ')
 }
 
+// Sets collapsed by default, current year excluded — otherwise every year back to Alpha lands
+// in front of the user the moment they open this tab.
+const CURRENT_YEAR = String(new Date().getFullYear())
+
 export default function SetsBrowser({ mode = 'sets', onSelectSet }: Props) {
   const [sets, setSets] = useState<ScryfallSet[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [filterType, setFilterType] = useState('all')
+  const [collapsedYears, setCollapsedYears] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -93,6 +98,9 @@ export default function SetsBrowser({ mode = 'sets', onSelectSet }: Props) {
         )
         const sorted = paperOnly.sort((a, b) => ((a.released_at ?? '') < (b.released_at ?? '') ? 1 : -1))
         setSets(sorted)
+        const years = new Set(sorted.map((s) => (s.released_at ? s.released_at.slice(0, 4) : 'Unknown')))
+        years.delete(CURRENT_YEAR)
+        setCollapsedYears(years)
       })
       .catch((err) => !cancelled && setError(err instanceof Error ? err.message : String(err)))
       .finally(() => !cancelled && setLoading(false))
@@ -100,6 +108,15 @@ export default function SetsBrowser({ mode = 'sets', onSelectSet }: Props) {
       cancelled = true
     }
   }, [mode])
+
+  function toggleYear(year: string): void {
+    setCollapsedYears((prev) => {
+      const next = new Set(prev)
+      if (next.has(year)) next.delete(year)
+      else next.add(year)
+      return next
+    })
+  }
 
   // Built from whatever set_types are actually present in this mode's data, rather than a
   // hardcoded list — Tokens mode only ever has one type, Sets mode has a couple dozen.
@@ -168,11 +185,18 @@ export default function SetsBrowser({ mode = 'sets', onSelectSet }: Props) {
 
       {!loading &&
         !error &&
-        groups.map(([year, yearSets]) => (
+        groups.map(([year, yearSets]) => {
+          const isCollapsed = collapsedYears.has(year)
+          return (
           <section key={year} className="set-year-group">
-            <h3 className="set-year-group__heading">
+            <button
+              className={`set-year-group__heading ${isCollapsed ? 'is-collapsed' : ''}`}
+              onClick={() => toggleYear(year)}
+            >
               {year} <span className="set-year-group__count">({yearSets.length})</span>
-            </h3>
+              <span className="set-year-group__chevron">▾</span>
+            </button>
+            {!isCollapsed && (
             <div className="set-grid">
               {yearSets.map((set) => (
                 <button key={set.id} className="set-tile" onClick={() => onSelectSet(set)}>
@@ -200,8 +224,10 @@ export default function SetsBrowser({ mode = 'sets', onSelectSet }: Props) {
                 </button>
               ))}
             </div>
+            )}
           </section>
-        ))}
+          )
+        })}
     </div>
   )
 }

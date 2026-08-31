@@ -9,6 +9,7 @@ export const SORT_OPTIONS: SortOption[] = [
   { order: 'edhrec', dir: 'asc', label: 'Popularity (EDHREC)' },
   { order: 'released', dir: 'desc', label: 'Release Date (Newest)' },
   { order: 'cmc', dir: 'asc', label: 'Mana Value (Low–High)' },
+  { order: 'cmc', dir: 'desc', label: 'Mana Value (High–Low)' },
   { order: 'color', dir: 'asc', label: 'Color (WUBRG)' },
   { order: 'rarity', dir: 'asc', label: 'Rarity (Common–Mythic)' },
   { order: 'usd', dir: 'asc', label: 'Price (Low–High)' },

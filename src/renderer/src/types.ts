@@ -242,6 +242,10 @@ export interface StoredDeck {
   // foil/nonfoil as finishes of the same printing id, not separate objects, so this has to be
   // our own tracked state rather than something derivable from the card data.
   foilIds: string[]
+  // Same "id, or id::occurrence for basic-land duplicates" keying as foilIds — a card slot in
+  // this list is showing its back/secondary face (transform, modal_dfc, or a reversible_card
+  // printing) instead of the front, remembered the same way a foil choice is.
+  flippedIds: string[]
   // Cards flagged from the deck grid's right-click menu as "on the chopping block" while still
   // deciding whether to cut them — a review aid only; removing a card from the deck is still a
   // separate, deliberate action.

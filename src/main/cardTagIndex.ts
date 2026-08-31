@@ -7,6 +7,7 @@ import { deriveCardTags, isManaOnlyAbilityLand, TAGGING_VERSION, type TaggableCa
 import { getAllCardTagOverrides } from './cardTagStore'
 import { getComboHeavyOracleIds, getComboIndexStatus } from './comboIndex'
 import { getAllTaggerCardData, TAGGER_INTEGRATION_VERSION } from './tagIndex'
+import { normalizeCard } from './scryfall'
 
 const USER_AGENT = 'BiblioPLEX/0.1 (https://github.com/; local dev build)'
 const BULK_DATA_URL = 'https://api.scryfall.com/bulk-data'
@@ -143,7 +144,12 @@ async function fetchJsonLines(url: string, signal?: AbortSignal): Promise<RawBul
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
-    cards.push(JSON.parse(trimmed) as RawBulkCard)
+    // Same backfill as scryfall.ts's getJson — the bulk oracle_cards dump can in principle pick
+    // a "reversible_card"-layout printing as an oracle id's canonical entry, which (unlike every
+    // other multi-faced layout) omits top-level oracle_id/cmc/type_line/etc. entirely. The loop
+    // below reads card.type_line directly with no fallback, so an unnormalized one would crash
+    // the whole bulk build partway through rather than just mis-tagging one card.
+    cards.push(normalizeCard(JSON.parse(trimmed) as Record<string, unknown>) as RawBulkCard)
   }
   return cards
 }
@@ -223,7 +229,10 @@ export async function buildCardTagIndex(): Promise<IndexStatus> {
         // regex fallback happens to notice, and every deck running basics was drowning real
         // Tag Search results in this noise.
         let tags: string[] = []
-        if (!card.type_line.includes('Basic Land')) {
+        // Snow-Covered basics print as "Basic Snow Land" (Snow sits between Basic and Land as
+        // its own supertype) — matches deckLogic.ts's isBasicLand on the renderer side, which
+        // needs the same OR for the same reason.
+        if (!card.type_line.includes('Basic Land') && !card.type_line.includes('Basic Snow Land')) {
           const tagger = taggerData[card.oracle_id]
           if (tagger) {
             tags = [...new Set([...tagger.specific.map((t) => t.label), ...tagger.rollup.map((t) => t.label)])]

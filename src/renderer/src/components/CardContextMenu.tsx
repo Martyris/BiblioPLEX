@@ -4,7 +4,7 @@ interface Props {
   x: number
   y: number
   onClose: () => void
-  actions: { label: string; onSelect: () => void }[]
+  actions: { label: string; onSelect: () => void; disabled?: boolean; title?: string }[]
 }
 
 /** A small cursor-positioned menu, opened via right-click on a card tile. Shared by any view
@@ -39,7 +39,7 @@ export default function CardContextMenu({ x, y, onClose, actions }: Props) {
       />
       <div ref={menuRef} className="context-menu" style={{ top: pos.top, left: pos.left }}>
         {actions.map((action) => (
-          <button key={action.label} onClick={action.onSelect}>
+          <button key={action.label} onClick={action.onSelect} disabled={action.disabled} title={action.title}>
             {action.label}
           </button>
         ))}

@@ -62,6 +62,10 @@ export interface StoredDeck {
   cardPoolIds: string[]
   wantIds: string[]
   foilIds: string[]
+  // Same "id, or id::occurrence for basic-land duplicates" keying as foilIds — a card slot in
+  // this list is showing its back/secondary face (transform, modal_dfc, or a reversible_card
+  // printing) instead of the front, remembered the same way a foil choice is.
+  flippedIds: string[]
   // Cards the player has flagged as "on the chopping block" while still deciding — a review
   // aid, not a removal itself, so cutting a card stays a deliberate separate action.
   consideringIds: string[]
@@ -129,6 +133,7 @@ async function load(): Promise<StoredDeck[]> {
       cardPoolIds: d.cardPoolIds ?? [],
       wantIds: d.wantIds ?? [],
       foilIds: d.foilIds ?? [],
+      flippedIds: d.flippedIds ?? [],
       consideringIds: d.consideringIds ?? [],
       lastScore: d.lastScore ?? null,
       archetypeKey: d.archetypeKey ?? 'auto',
@@ -185,6 +190,7 @@ export async function createDeck(
     cardPoolIds: [],
     wantIds: [],
     foilIds: [],
+    flippedIds: [],
     consideringIds: [],
     lastScore: null,
     archetypeKey: 'auto',
@@ -210,6 +216,7 @@ export interface DeckPatch {
   cardPoolIds?: string[]
   wantIds?: string[]
   foilIds?: string[]
+  flippedIds?: string[]
   consideringIds?: string[]
   lastScore?: { overall: number; grade: string; recordedAt: string } | null
   archetypeKey?: string
@@ -266,6 +273,7 @@ export async function createDeckFromPrecon(precon: {
     cardPoolIds: [],
     wantIds: [],
     foilIds: [],
+    flippedIds: [],
     consideringIds: [],
     lastScore: null,
     archetypeKey: 'auto',
@@ -296,6 +304,7 @@ export async function duplicateDeck(id: string): Promise<StoredDeck | null> {
     cardPoolIds: [...original.cardPoolIds],
     wantIds: [...original.wantIds],
     foilIds: [...original.foilIds],
+    flippedIds: [...original.flippedIds],
     consideringIds: [...original.consideringIds],
     userCardTags: { ...original.userCardTags },
     order: maxOrder + 1,

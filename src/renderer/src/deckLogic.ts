@@ -2,7 +2,11 @@ import type { ScryfallCard } from './types'
 import { colorIdentityGradient, colorIdentityName } from './colorIdentityName'
 
 export function isBasicLand(card: Pick<ScryfallCard, 'type_line'>): boolean {
-  return card.type_line.includes('Basic Land')
+  // Snow-Covered basics print as "Basic Snow Land" — Snow sits as its own supertype between
+  // Basic and Land, so the plain "Basic Land" substring alone doesn't match it. Missing this
+  // was the actual cause behind a whole family of bugs (basic land counts not including snow
+  // copies, singleton exemption not applying to them, etc.) — not just a display quirk.
+  return card.type_line.includes('Basic Land') || card.type_line.includes('Basic Snow Land')
 }
 
 /** Toggles a printing id in/out of a plain staging list (Card Pool, Want) — no singleton
@@ -34,6 +38,13 @@ const COLOR_TO_BASIC_LAND: Record<string, (typeof BASIC_LAND_NAMES)[number]> = {
 export const BASIC_LAND_COLOR: Partial<Record<(typeof BASIC_LAND_NAMES)[number], string>> = Object.fromEntries(
   Object.entries(COLOR_TO_BASIC_LAND).map(([color, name]) => [name, color])
 )
+
+/** Every basic land name Scryfall prints has a "Snow-Covered <name>" counterpart (including
+ *  Wastes, despite it being a much later addition) — plain string concatenation, not a lookup
+ *  table, since the naming is completely regular. */
+export function snowNameFor(name: string): string {
+  return `Snow-Covered ${name}`
+}
 
 /** Basics worth offering a direct stepper for, given a deck's (commander + partner) color
  *  identity — Wastes is colorless and legal in any deck regardless of identity, so it's
