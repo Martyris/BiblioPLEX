@@ -18,6 +18,20 @@ interface CardTagOverride {
   removed: string[]
 }
 
+interface UpdateInfo {
+  version: string
+  downloadUrl: string
+  size: number
+  releaseUrl: string
+}
+
+interface GameSimSeatMeta {
+  engineName: string
+  deckName: string
+  commanderName: string
+  cardNames: string[]
+}
+
 interface DeckPatch {
   name?: string
   commanderId?: string
@@ -109,9 +123,11 @@ const api = {
       cardNames: string[]
       logicRules?: { type: 'holdInstantUntilAttackTrigger'; permanentNames: string[] }[]
     }[],
-    requestId: string
-  ) => ipcRenderer.invoke('gamesim:run-game', players, requestId),
+    requestId: string,
+    seatMeta: GameSimSeatMeta[]
+  ) => ipcRenderer.invoke('gamesim:run-game', players, requestId, seatMeta),
   abortGameSim: () => ipcRenderer.invoke('gamesim:abort'),
+  getActiveGameSim: () => ipcRenderer.invoke('gamesim:active'),
   onGameSimProgress: (callback: (progress: unknown) => void) => {
     const listener = (_event: unknown, progress: unknown): void => callback(progress)
     ipcRenderer.on('gamesim:progress', listener)
@@ -133,6 +149,16 @@ const api = {
     ipcRenderer.invoke('accounts:set-profile-picture-upload', id, dataUrl),
   setSchool: (id: string, school: string | null) => ipcRenderer.invoke('accounts:set-school', id, school),
   setAppLocale: (locale: string) => ipcRenderer.invoke('locale:set', locale),
+  checkForUpdate: () => ipcRenderer.invoke('updater:check') as Promise<UpdateInfo | null>,
+  downloadUpdate: (info: UpdateInfo) => ipcRenderer.invoke('updater:download', info) as Promise<string>,
+  installUpdate: (filePath: string) => ipcRenderer.invoke('updater:install', filePath),
+  onUpdateProgress: (callback: (progress: { received: number; total: number }) => void) => {
+    const listener = (_event: unknown, progress: { received: number; total: number }): void => callback(progress)
+    ipcRenderer.on('updater:progress', listener)
+    return (): void => {
+      ipcRenderer.removeListener('updater:progress', listener)
+    }
+  },
   getLocalizedCardArt: (set: string, collectorNumber: string) =>
     ipcRenderer.invoke('scryfall:localized-art', set, collectorNumber),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),

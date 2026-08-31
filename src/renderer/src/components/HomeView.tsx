@@ -5,6 +5,7 @@ import { playPressSound, playReleaseSound, playScrambleSound } from '../clickSou
 import { scrambleTransition } from '../scrambleText'
 import { onAccountChanged } from '../accountEvents'
 import { t, useLocale } from '../i18n'
+import type { UpdateInfo } from '../types'
 
 type Tab = 'home' | 'search' | 'sets' | 'tokens' | 'commander' | 'precons' | 'decks'
 
@@ -72,6 +73,12 @@ export default function HomeView({ onNavigate, onSearch }: Props) {
   const cancelMottoScramble = useRef<(() => void) | null>(null)
   const cancelTitleScramble = useRef<(() => void) | null>(null)
 
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
+  const [updateStage, setUpdateStage] = useState<'idle' | 'downloading' | 'ready' | 'error'>('idle')
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const [downloadedUpdatePath, setDownloadedUpdatePath] = useState<string | null>(null)
+  const [updateError, setUpdateError] = useState<string | null>(null)
+
   useEffect(() => {
     let cancelled = false
     function loadAccount(): void {
@@ -90,6 +97,39 @@ export default function HomeView({ onNavigate, onSearch }: Props) {
       cancelTitleScramble.current?.()
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    window.api.checkForUpdate().then((info) => {
+      if (!cancelled && info) setUpdateInfo(info)
+    })
+    const unsubscribe = window.api.onUpdateProgress(({ received, total }) => {
+      if (total > 0) setUpdateProgress(received / total)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  async function handleDownloadUpdate(): Promise<void> {
+    if (!updateInfo) return
+    setUpdateStage('downloading')
+    setUpdateProgress(0)
+    setUpdateError(null)
+    try {
+      const path = await window.api.downloadUpdate(updateInfo)
+      setDownloadedUpdatePath(path)
+      setUpdateStage('ready')
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err))
+      setUpdateStage('error')
+    }
+  }
+
+  function handleInstallUpdate(): void {
+    if (downloadedUpdatePath) window.api.installUpdate(downloadedUpdatePath)
+  }
 
   const school = getSchool(account?.school)
   const [glowA, glowB] = school ? schoolGlowColors(school) : []
@@ -179,6 +219,37 @@ export default function HomeView({ onNavigate, onSearch }: Props) {
 
   return (
     <div className="home">
+      {updateInfo && (
+        <div className="update-banner">
+          <span className="update-banner__text">
+            {updateStage === 'ready'
+              ? `BiblioPLEX ${updateInfo.version} is downloaded and ready to install.`
+              : `A new version of BiblioPLEX is available — v${updateInfo.version}.`}
+          </span>
+          {updateStage === 'idle' && (
+            <button className="primary-button update-banner__button" onClick={handleDownloadUpdate}>
+              Download Update
+            </button>
+          )}
+          {updateStage === 'downloading' && (
+            <div className="update-banner__progress" role="progressbar" aria-valuenow={Math.round(updateProgress * 100)}>
+              <div className="update-banner__progress-fill" style={{ width: `${Math.round(updateProgress * 100)}%` }} />
+              <span className="update-banner__progress-label">{Math.round(updateProgress * 100)}%</span>
+            </div>
+          )}
+          {updateStage === 'ready' && (
+            <button className="primary-button update-banner__button" onClick={handleInstallUpdate}>
+              Restart &amp; Update
+            </button>
+          )}
+          {updateStage === 'error' && (
+            <span className="update-banner__error">
+              Update failed{updateError ? `: ${updateError}` : ''} — try again later.
+            </span>
+          )}
+        </div>
+      )}
+
       <section className="home-hero">
         <div className="home-logo-stage">
           <Logo

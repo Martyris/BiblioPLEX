@@ -67,7 +67,9 @@ import {
   stopGameSim,
   abortGame as abortGameSim,
   onGameSimProgress,
-  type GameSimPlayerInput
+  getActiveGame,
+  type GameSimPlayerInput,
+  type GameSimSeatMeta
 } from './gameSim'
 import {
   listAccounts,
@@ -82,6 +84,7 @@ import {
   setSchool,
   type School
 } from './accounts'
+import { checkForUpdate, downloadUpdate, installUpdate, type UpdateInfo } from './updater'
 
 // Portable-style storage: packaged builds keep decks.json/accounts.json/precons.json/the card-
 // tag index in a "data" folder next to wherever the .exe is actually being run from, instead of
@@ -302,6 +305,21 @@ app.whenReady().then(() => {
     setMainLocale(locale)
   })
 
+  ipcMain.handle('updater:check', async () => {
+    return checkForUpdate()
+  })
+
+  ipcMain.handle('updater:download', async (event, info: UpdateInfo) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return downloadUpdate(info, (received, total) => {
+      win?.webContents.send('updater:progress', { received, total })
+    })
+  })
+
+  ipcMain.handle('updater:install', (_event, filePath: string) => {
+    installUpdate(filePath)
+  })
+
   ipcMain.handle('scryfall:localized-art', async (_event, set: string, collectorNumber: string) => {
     return getLocalizedCardArt(set, collectorNumber)
   })
@@ -400,12 +418,19 @@ app.whenReady().then(() => {
     return checkGameSimCards(cardNames)
   })
 
-  ipcMain.handle('gamesim:run-game', async (_event, players: GameSimPlayerInput[], requestId: string) => {
-    return runGameSim(players, requestId)
-  })
+  ipcMain.handle(
+    'gamesim:run-game',
+    async (_event, players: GameSimPlayerInput[], requestId: string, seatMeta: GameSimSeatMeta[]) => {
+      return runGameSim(players, requestId, seatMeta)
+    }
+  )
 
   ipcMain.handle('gamesim:abort', () => {
     abortGameSim()
+  })
+
+  ipcMain.handle('gamesim:active', () => {
+    return getActiveGame()
   })
 
   // Pushed (not request/response — ipcMain.handle can't stream) to whatever windows exist while

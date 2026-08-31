@@ -170,6 +170,29 @@ export interface GameSimProgress {
   logLine: string
 }
 
+// Per-seat display info the renderer already has at game-start (see PlaytestTabView's
+// gamePlayersRef) but that never reaches java-bridge itself — GameSimPlayerInput only carries
+// what the engine needs. Threaded through runGame purely so it can be handed back verbatim to
+// whichever PlaytestTabView instance later reattaches to this game (see getActiveGame below);
+// gameSim.ts itself never reads these fields.
+export interface GameSimSeatMeta {
+  engineName: string
+  deckName: string
+  commanderName: string
+  cardNames: string[]
+}
+
+export interface ActiveGameSim {
+  requestId: string
+  seatMeta: GameSimSeatMeta[]
+  // Every progress snapshot seen so far, in order — lets a PlaytestTabView that (re)mounts after
+  // the game already started jump straight to the current board state, and rebuild the narrator
+  // log, without having replayed the game live itself.
+  history: GameSimProgress[]
+  result: GameSimResult | GameSimError | null
+  done: boolean
+}
+
 function isGameSimError(x: unknown): x is GameSimError {
   return typeof x === 'object' && x !== null && (x as { error?: unknown }).error === true
 }
@@ -181,6 +204,16 @@ let stdoutBuffer = ''
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 let nextId = 1
 const progressListeners = new Set<(progress: GameSimProgress) => void>()
+// The game currently running (or the last one to finish, until a new one starts or this one is
+// aborted) — see ActiveGameSim's own comment for why. Only one game runs at a time (java-bridge
+// is single-threaded), so there's never more than one of these to track.
+let activeGame: ActiveGameSim | null = null
+
+/** Lets a freshly-(re)mounted Playtest tab discover a game that's still running (or already
+ *  finished) in the background — e.g. the user switched away mid-game and came back. */
+export function getActiveGame(): ActiveGameSim | null {
+  return activeGame
+}
 
 /** Subscribed once from index.ts to forward progress ticks to the renderer via
  *  webContents.send — gameSim.ts itself has no window reference, so it just fans this out to
@@ -227,6 +260,13 @@ function handleStdoutData(chunk: Buffer): void {
 
     if (obj.event === 'progress') {
       const progress = obj as unknown as GameSimProgress
+      // Progress events aren't request/response (they don't go through `pending`), but they do
+      // carry the id of whichever runGame request is currently in flight (see runGame's
+      // requestId comment) — that's how a reattaching renderer's history lines up with what it
+      // sees live afterward.
+      if (activeGame && (obj as { id?: string }).id === activeGame.requestId) {
+        activeGame.history.push(progress)
+      }
       progressListeners.forEach((listener) => listener(progress))
       continue
     }
@@ -348,19 +388,34 @@ export async function checkCards(cardNames: string[]): Promise<string[] | GameSi
 // the meantime. Without filtering by id, a "new" game's board would show the old game's
 // still-in-flight state under the new UI — this was a real bug (a freshly started game appeared
 // to open mid-game, at whatever turn the stale run happened to be on).
-export async function runGame(players: GameSimPlayerInput[], requestId: string): Promise<GameSimResult | GameSimError> {
+export async function runGame(
+  players: GameSimPlayerInput[],
+  requestId: string,
+  seatMeta: GameSimSeatMeta[]
+): Promise<GameSimResult | GameSimError> {
+  activeGame = { requestId, seatMeta, history: [], result: null, done: false }
   try {
     const response = await sendRequest<{ winner?: string; turns?: number; gameMs?: number; error?: string }>(
       'runGame',
       { players },
       requestId
     )
-    if (response.error || !response.winner) {
-      return { error: true, details: response.error ?? 'No result returned' }
+    const result: GameSimResult | GameSimError =
+      response.error || !response.winner
+        ? { error: true, details: response.error ?? 'No result returned' }
+        : { winner: response.winner, turns: response.turns ?? 0, gameMs: response.gameMs ?? 0 }
+    if (activeGame?.requestId === requestId) {
+      activeGame.result = result
+      activeGame.done = true
     }
-    return { winner: response.winner, turns: response.turns ?? 0, gameMs: response.gameMs ?? 0 }
+    return result
   } catch (err) {
-    return { error: true, details: err instanceof Error ? err.message : String(err) }
+    const result: GameSimError = { error: true, details: err instanceof Error ? err.message : String(err) }
+    if (activeGame?.requestId === requestId) {
+      activeGame.result = result
+      activeGame.done = true
+    }
+    return result
   }
 }
 
@@ -372,6 +427,7 @@ export function stopGameSim(): void {
   child?.kill()
   child = null
   status = { phase: 'idle' }
+  activeGame = null
 }
 
 /** Called when the user ends a game while it's still actually simulating (Playtest's "End
@@ -387,6 +443,7 @@ export function abortGame(): void {
   const dying = child
   child = null
   status = { phase: 'idle' }
+  activeGame = null
   pending.forEach(({ reject }) => reject(new Error('Game aborted')))
   pending.clear()
   dying?.kill()

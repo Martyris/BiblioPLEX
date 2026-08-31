@@ -142,6 +142,24 @@ interface GameSimProgress {
   logLine: string
 }
 
+// Mirrors gamePlayersRef's own shape — see runGameSim's requestId comment. Sent up alongside
+// the engine request purely so a PlaytestTabView that (re)mounts later can rebuild gamePlayersRef
+// without having been the instance that actually started the game.
+interface GameSimSeatMeta {
+  engineName: string
+  deckName: string
+  commanderName: string
+  cardNames: string[]
+}
+
+interface ActiveGameSim {
+  requestId: string
+  seatMeta: GameSimSeatMeta[]
+  history: GameSimProgress[]
+  result: GameSimResult | { error: true; details: string } | null
+  done: boolean
+}
+
 const SLOT_LABELS = ['Player 1', 'Player 2', 'Player 3', 'Player 4']
 
 // A floating "+3"/"-5" badge shown next to a seat's life total right after it changes — nonce
@@ -1796,6 +1814,54 @@ export default function PlaytestTabView() {
     })
   }, [])
 
+  // Games run in the main process (see gameSim.ts), fully decoupled from this component's own
+  // lifecycle — switching away from the Playtest tab unmounts this view, but doesn't touch the
+  // simulation, which keeps computing (or, if it already finished, just sits on its result)
+  // regardless of whether anything's watching. Without this, coming back to the tab always
+  // landed back on the empty seat-picker, silently discarding whatever the user left running.
+  // This jumps straight to the CURRENT board state (or the final result, if it's done) rather
+  // than replaying the whole game — reattaching is for "let it run and check the outcome later,"
+  // not for re-watching it.
+  useEffect(() => {
+    let cancelled = false
+    window.api.getActiveGameSim().then((active) => {
+      if (cancelled || !active) return
+      const game = active as ActiveGameSim
+      activeRequestIdRef.current = game.requestId
+      gamePlayersRef.current = game.seatMeta
+      // "Player N" is always tied to the ORIGINAL seat slot (see handleWatchGame's comment on
+      // CLOCKWISE_SLOT_ORDER) regardless of turn order, so which slots were filled is fully
+      // recoverable from which "Player N" labels exist in seatMeta.
+      const filledLabels = new Set(game.seatMeta.map((m) => m.engineName))
+      setSeatNames(SLOT_LABELS.map((label) => (filledLabels.has(label) ? label : null)))
+      // foilIdsByPlayerName is module-level (populated in handleWatchGame at game start) and
+      // outlives this component's unmount/remount on its own — nothing to restore here.
+
+      snapshotHistoryRef.current = game.history
+      const latest = game.history.length > 0 ? game.history[game.history.length - 1] : null
+      if (latest) {
+        lastDrainedRef.current = latest
+        setProgress(latest)
+        setNarratorLog(game.history.filter((h) => h.logLine).map((h) => recolorPlayerNames(h.logLine)))
+      }
+      setPlaying(true)
+      setVictoryDismissed(false)
+      setAnalysisOpen(false)
+      setError(null)
+
+      if (game.done) {
+        setRunning(false)
+        if (game.result && 'error' in game.result) setError(game.result.details)
+        else if (game.result) setResult(game.result)
+      } else {
+        setRunning(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     if (!playing) return
     // A plain fixed-interval setInterval can't vary its own pace, but the pre-game stretch
@@ -2182,7 +2248,7 @@ export default function PlaytestTabView() {
         return
       }
 
-      const gameResult = await window.api.runGameSim(players, requestId)
+      const gameResult = await window.api.runGameSim(players, requestId, gamePlayersRef.current)
       if ('error' in gameResult) {
         setError((gameResult as { details: string }).details)
         setRunning(false)

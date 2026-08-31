@@ -266,7 +266,7 @@ export default function App() {
           />
         )}
         <div className="app__header-right">
-          <LanguagePicker />
+          {/* Hidden for now — LanguagePicker stays wired up (i18n still active), just not shown. */}
           <AccountPanel />
           <WindowControls />
         </div>

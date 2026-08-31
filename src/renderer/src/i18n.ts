@@ -26,7 +26,7 @@ const en: Dictionary = {
   'home.welcomeBack': 'Welcome back to the {brand}, {username}.',
   'home.welcomeBackStudent': 'Welcome back to the {brand}, {username}, student of {school}.',
 
-  'account.buttonDefault': 'Account',
+  'account.buttonDefault': 'Profile',
   'account.chooseProfile': 'Choose a profile',
   'account.createProfile': 'Create Profile',
   'account.createProfileHeading': 'Create a profile',
@@ -112,7 +112,7 @@ const ptBR: Dictionary = {
   'home.welcomeBack': 'Bem-vindo de volta à {brand}, {username}.',
   'home.welcomeBackStudent': 'Bem-vindo de volta à {brand}, {username}, estudante de {school}.',
 
-  'account.buttonDefault': 'Conta',
+  'account.buttonDefault': 'Perfil',
   'account.chooseProfile': 'Escolha um perfil',
   'account.createProfile': 'Criar Perfil',
   'account.createProfileHeading': 'Criar um perfil',

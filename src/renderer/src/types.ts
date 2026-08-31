@@ -199,6 +199,13 @@ export interface DeckTag {
 
 export type Bracket = 1 | 2 | 3 | 4 | 5
 
+export interface UpdateInfo {
+  version: string
+  downloadUrl: string
+  size: number
+  releaseUrl: string
+}
+
 // A "Logic file" encodes deck-specific strategic guidance for the Playtest bot AI — authored
 // externally (deck owner + their own Claude access + docs/logic-file-guide.md), pasted into
 // Deck Builder's Import Logic modal, and read-only from the app's side. v1 supports exactly one
