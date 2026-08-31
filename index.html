@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BiblioPLEX — a free, open source Commander deck builder for Magic: The Gathering</title>
+<meta name="description" content="BiblioPLEX is a free, open source Windows desktop app for Magic: The Gathering — Scryfall-powered card search, Commander/EDH deck building with EDHREC recommendations, Deck Score &amp; Analytics, and a rules-accurate XMage playtest engine.">
+<link rel="icon" href="assets/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #14141A; }
+  a { color: #7C6FEF; text-decoration: none; }
+  a:hover { color: #9C92F5; text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div style="display:flex; justify-content:center; background:#14141A">
+      <div style="width:100%; max-width:1440px; background:#14141A; overflow:hidden; font-family:'Segoe UI',system-ui,-apple-system,sans-serif; color:#E8E8EF">
+
+        <!-- nav -->
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:24px; padding:18px 40px; border-bottom:1px solid #2F2F3A; background:#14141A">
+          <div style="display:flex; align-items:center; gap:11px">
+            <img src="assets/logo.png" alt="BiblioPLEX" style="width:32px; height:32px; display:block">
+            <span style="font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:19px; font-weight:700; letter-spacing:-0.01em; line-height:1; display:block; position:relative; top:2px">BiblioPLEX</span>
+          </div>
+          <div style="display:flex; align-items:center; gap:26px; font-size:14px; color:#9A9AAB; position:relative; top:2px">
+            <a href="#features" style="color:#9A9AAB">Features</a>
+            <a href="#made" style="color:#9A9AAB">How it was made</a>
+            <a href="https://github.com/Martyris/BiblioPLEX" target="_blank" rel="noopener" style="color:#9A9AAB">GitHub</a>
+            <a href="https://www.patreon.com/cw/Martyris" target="_blank" rel="noopener" style="color:#9A9AAB">Patreon</a>
+            <a href="https://github.com/Martyris/BiblioPLEX/releases/latest/download/BiblioPLEX-win.zip" style="display:inline-flex; align-items:center; height:36px; padding:0 18px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#7C6FEF; color:#0C0C11; font-size:14px; font-weight:600; text-decoration:none">Download</a>
+          </div>
+        </div>
+
+        <!-- hero -->
+        <div style="position:relative; padding:22px 40px 0; text-align:center; overflow:hidden">
+          <img src="assets/logo.png" alt="" style="position:absolute; top:50%; right:-240px; transform:translateY(-50%); width:960px; height:960px; opacity:0.05; mask-image:linear-gradient(to bottom, black 10%, transparent 78%); -webkit-mask-image:linear-gradient(to bottom, black 10%, transparent 78%); pointer-events:none">
+          <div style="position:relative; display:flex; flex-direction:column; align-items:center; gap:22px; max-width:820px; margin:0 auto">
+            <img src="assets/logo.png" alt="" style="width:180px; height:180px; display:block">
+            <h1 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:70px; font-weight:700; letter-spacing:-0.03em; line-height:1">BiblioPLEX</h1>
+            <p style="margin:0; font-size:22px; line-height:1.45; color:#E8E8EF; text-wrap:pretty">A free open source deck builder companion, now and forever.</p>
+            <p style="margin:0; max-width:660px; font-size:16px; line-height:1.6; color:#9A9AAB; text-wrap:pretty">A Windows desktop app for Magic: The Gathering — card search, Commander deck building with EDHREC recommendations, and a rules-accurate playtest engine. <em>Made by Martyris.</em></p>
+            <div style="display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:8px">
+              <a href="https://github.com/Martyris/BiblioPLEX/releases/latest/download/BiblioPLEX-win.zip" style="display:inline-flex; flex-direction:column; align-items:center; justify-content:center; height:56px; padding:0 30px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#7C6FEF; color:#0C0C11; font-size:16px; font-weight:700; text-decoration:none">Download for Windows</a>
+              <a href="https://github.com/Martyris/BiblioPLEX" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; justify-content:center; height:56px; padding:0 28px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#1E1E26; border:1px solid #2F2F3A; color:#E8E8EF; font-size:16px; font-weight:600; text-decoration:none">View the source</a>
+              <a href="https://www.patreon.com/cw/Martyris" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; justify-content:center; height:56px; padding:0 28px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#1E1E26; border:1px solid #2F2F3A; color:#E8E8EF; font-size:16px; font-weight:600; text-decoration:none">Support on Patreon</a>
+            </div>
+            <div style="font-size:13px; color:#9A9AAB">Windows 10 / 11 · a single portable <code style="font-family:ui-monospace,Consolas,monospace; color:#E8E8EF">.exe</code> · no installer, no admin rights · MIT licensed</div>
+            <div style="display:inline-flex; align-items:center; gap:10px; margin-top:14px; padding:9px 18px 9px 14px; border-radius:999px; border:1px solid #3A3455; background:rgba(124,111,239,0.10)">
+              <span style="width:7px; height:7px; border-radius:999px; background:#7C6FEF"></span>
+              <span style="font-size:13px; color:#C9C4F2">Built with the assistance of <strong style="color:#E8E8EF; font-weight:600">Claude Code</strong>, Anthropic's agentic coding tool. <a href="#made" style="color:#9C92F5">How that went →</a></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- hero shot -->
+        <div style="padding:56px 40px 0">
+          <div style="border:1px solid #2F2F3A; border-radius:10px; overflow:hidden; background:#1E1E26">
+            <img src="assets/deck-editor.png" alt="The BiblioPLEX deck editor" style="display:block; width:100%; height:auto">
+          </div>
+          <div style="margin-top:12px; text-align:center; font-family:ui-monospace,Consolas,monospace; font-size:11.5px; letter-spacing:0.1em; text-transform:uppercase; color:#6A6A7B">The deck editor — bracket, tags, archetype targets, 100 cards</div>
+        </div>
+
+        <!-- deep dives -->
+        <div id="features" style="display:flex; flex-direction:column; gap:0; padding:88px 40px 0">
+          <div style="font-family:ui-monospace,Consolas,monospace; font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#9A9AAB">What it does</div>
+
+          <!-- 1: deck building -->
+          <div style="display:grid; grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr); gap:52px; align-items:center; padding:40px 0 56px; border-bottom:1px solid #2F2F3A">
+            <div style="display:flex; flex-direction:column; gap:16px">
+              <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:34px; font-weight:600; letter-spacing:-0.02em; line-height:1.15">Commander deck building that knows the format</h2>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Singleton is enforced, Partner and Background second commanders are handled properly, and the Commander Bracket (1–5) is tracked on the deck itself. Drag to reorder, then regroup the whole list by type, color, mana cost, subtype or set — whichever view you happen to be thinking in.</p>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Around the deck sit a Card Pool and a Want list for cards you're considering but haven't committed to, and Hot Swap for trying a substitution without losing your place.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:4px">
+                <span style="padding:6px 14px; border-radius:999px; background:#1E1E26; border:1px solid #2F2F3A; font-size:13px; color:#C7C7D4">Singleton enforcement</span>
+                <span style="padding:6px 14px; border-radius:999px; background:#1E1E26; border:1px solid #2F2F3A; font-size:13px; color:#C7C7D4">Partner / Background</span>
+                <span style="padding:6px 14px; border-radius:999px; background:#1E1E26; border:1px solid #2F2F3A; font-size:13px; color:#C7C7D4">Bracket 1–5</span>
+                <span style="padding:6px 14px; border-radius:999px; background:#1E1E26; border:1px solid #2F2F3A; font-size:13px; color:#C7C7D4">Card Pool + Want</span>
+                <span style="padding:6px 14px; border-radius:999px; background:#1E1E26; border:1px solid #2F2F3A; font-size:13px; color:#C7C7D4">Hot Swap</span>
+              </div>
+            </div>
+            <div style="border:1px solid #2F2F3A; border-radius:10px; overflow:hidden; background:#1E1E26">
+              <img src="assets/card-pool.png" alt="Card Pool view" style="display:block; width:100%; height:auto">
+            </div>
+          </div>
+
+          <!-- 2: score & analytics -->
+          <div style="display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,0.9fr); gap:52px; align-items:center; padding:56px 0; border-bottom:1px solid #2F2F3A">
+            <div style="display:flex; flex-direction:column; gap:14px">
+              <div style="border:1px solid #2F2F3A; border-radius:10px; overflow:hidden; background:#1E1E26">
+                <img src="assets/deck-score.png" alt="Deck Score breakdown" style="display:block; width:100%; height:auto">
+              </div>
+              <div style="border:1px solid #2F2F3A; border-radius:10px; overflow:hidden; background:#1E1E26">
+                <img src="assets/analytics.png" alt="Deck analytics" style="display:block; width:100%; height:auto">
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:16px">
+              <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:34px; font-weight:600; letter-spacing:-0.02em; line-height:1.15">A sanity check, not a power rating</h2>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Deck Score measures ramp, draw, removal, board wipes, curve and color consistency against typical Commander guidelines — and shifts those targets by archetype, so a Spellslinger deck isn't judged against a creature deck's numbers. Each category tells you the actual count and the range it's aiming for.</p>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Analytics breaks down the mana curve and color consistency, and Commander Spellbook combo detection flags the combos already sitting in your list — including the ones you didn't put there on purpose.</p>
+            </div>
+          </div>
+
+          <!-- 3: playtest -->
+          <div style="display:grid; grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr); gap:52px; align-items:center; padding:56px 0 64px">
+            <div style="display:flex; flex-direction:column; gap:16px">
+              <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:34px; font-weight:600; letter-spacing:-0.02em; line-height:1.15">Play the deck before you build it</h2>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Two modes. A lightweight goldfish sandbox — shuffle, draw, move things around a freeform battlefield — for checking whether the opening hands feel right.</p>
+              <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">And a full four-player bot-vs-bot simulator running on the open-source XMage rules engine, so the games actually resolve by the rules: priority, the stack, combat, triggers. Set it to 4× and watch a pod play itself out, with a full log of what happened.</p>
+              <div style="display:flex; flex-direction:column; gap:8px; padding:18px 20px; border:1px solid #2F2F3A; border-radius:10px; background:#1E1E26">
+                <div style="font-family:ui-monospace,Consolas,monospace; font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#9A9AAB">Still under development</div>
+                <p style="margin:0; font-size:15px; line-height:1.6; color:#9A9AAB; text-wrap:pretty">The simulator works, but the bot is a long way from a good pilot. It plays a fair curve-out reasonably well and misplays anything that needs a plan — combo decks and decks that live or die on tight sequencing in particular. Treat the results as a rough goldfish, not an evaluation of the deck.</p>
+              </div>
+            </div>
+            <div style="border:1px solid #2F2F3A; border-radius:10px; overflow:hidden; background:#1E1E26">
+              <img src="assets/simulation.png" alt="Bot-vs-bot simulation" style="display:block; width:100%; height:auto">
+            </div>
+          </div>
+        </div>
+
+        <!-- brief features -->
+        <div style="padding:0 40px 88px">
+          <div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px">
+            <div style="display:flex; flex-direction:column; background:#1E1E26; border:1px solid #2F2F3A; border-radius:10px; overflow:hidden">
+              <img src="assets/search.png" alt="Card search" style="display:block; width:100%; height:150px; object-fit:cover; object-position:top left; border-bottom:1px solid #2F2F3A">
+              <div style="display:flex; flex-direction:column; gap:9px; padding:20px 22px 24px">
+                <h3 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:19px; font-weight:600">Search</h3>
+                <p style="margin:0; font-size:14.5px; line-height:1.6; color:#9A9AAB; text-wrap:pretty">The full Scryfall database, by structured filter (color, type, mana value, rarity, legality) or free text — and any type or subtype on a card is clickable straight from its inspect view.</p>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; background:#1E1E26; border:1px solid #2F2F3A; border-radius:10px; overflow:hidden">
+              <div style="position:relative; height:150px; overflow:hidden; border-bottom:1px solid #2F2F3A">
+                <img src="assets/deck-editor.png" alt="Card tags detected on a deck" style="position:absolute; top:-170px; left:-12px; width:726px; height:auto; display:block">
+              </div>
+              <div style="display:flex; flex-direction:column; gap:9px; padding:20px 22px 24px">
+                <h3 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:19px; font-weight:600">Tag Search</h3>
+                <p style="margin:0; font-size:14.5px; line-height:1.6; color:#9A9AAB; text-wrap:pretty">Search the whole card pool by Scryfall Tagger's real community tags — spot removal, ramp, sacrifice outlet — rather than guessing at oracle text.</p>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; background:#1E1E26; border:1px solid #2F2F3A; border-radius:10px; overflow:hidden">
+              <img src="assets/precons.png" alt="Precon library" style="display:block; width:100%; height:150px; object-fit:cover; object-position:top left; border-bottom:1px solid #2F2F3A">
+              <div style="display:flex; flex-direction:column; gap:9px; padding:20px 22px 24px">
+                <h3 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:19px; font-weight:600">EDHREC &amp; precons</h3>
+                <p style="margin:0; font-size:14.5px; line-height:1.6; color:#9A9AAB; text-wrap:pretty">Commander recommendations and the real Top Commanders ranking, plus a precon library resolved to exact historical decklists.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- how it was made -->
+        <div id="made" style="padding:0 40px 88px">
+          <div style="position:relative; overflow:hidden; border:1px solid #3A3455; border-radius:10px; background:#1A1826; padding:52px 56px">
+            <div style="position:absolute; top:-160px; right:-120px; width:520px; height:520px; background:radial-gradient(circle at center, rgba(124,111,239,0.16), rgba(26,24,38,0) 70%); pointer-events:none"></div>
+            <div style="position:relative; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:48px; align-items:start">
+              <div style="display:flex; flex-direction:column; gap:16px">
+                <div style="font-family:ui-monospace,Consolas,monospace; font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#9C92F5">How it was made</div>
+                <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:36px; font-weight:600; letter-spacing:-0.02em; line-height:1.15">This app was built with Claude Code</h2>
+                <p style="margin:0; font-size:16.5px; line-height:1.65; color:#C7C7D4; text-wrap:pretty">Every part of BiblioPLEX — the Scryfall search layer, the deck editor, the scoring model, the EDHREC and Commander Spellbook integrations, the XMage simulation harness — was written over several weeks of working with Claude Code, Anthropic's agentic coding tool.</p>
+                <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">The scope of the project was decided by what one person cares about. How much of it got finished was decided by working alongside an agent, day after day, until it held up. The whole repository is public, so the result is there to read either way.</p>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:16px; padding-top:44px">
+                <p style="margin:0; font-size:16px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">That's not a disclaimer at the bottom of the page. It's the reason a single hobbyist could ship a desktop app with a rules-accurate game engine in it at all. But it wasn't a prompt and a finished app — it was weeks of sitting with the thing: describing what Commander players actually need, reading what came back, and rejecting a lot of it. Then testing. Deck after deck, simulated game after simulated game, hunting the cases where the scoring lied or the engine mis-resolved a trigger, and going back in to fix them.</p>
+                <a href="https://github.com/Martyris/BiblioPLEX" target="_blank" rel="noopener" style="align-self:flex-start; display:inline-flex; align-items:center; height:44px; padding:0 22px; margin-top:4px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#1E1E26; border:1px solid #3A3455; color:#E8E8EF; font-size:15px; font-weight:600; text-decoration:none">Read the source on GitHub</a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- download / requirements -->
+        <div style="padding:0 40px 88px">
+          <div style="display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr); gap:20px">
+            <div style="display:flex; flex-direction:column; gap:18px; background:#1E1E26; border:1px solid #2F2F3A; border-radius:10px; padding:36px 38px">
+              <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:28px; font-weight:600; letter-spacing:-0.02em">Get it running</h2>
+              <p style="margin:0; font-size:15.5px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">The Windows build is portable: one <code style="font-family:ui-monospace,Consolas,monospace; color:#E8E8EF">.exe</code>, no installer, no admin rights, nothing written outside its own folder. Put it wherever you like and double-click it. To remove it, delete the file.</p>
+              <p style="margin:0; font-size:15.5px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Because it's unsigned, Windows SmartScreen will likely warn you the first time — that's expected for a small free project. If you'd rather not take an unsigned binary on trust, the source is public and builds from a clone.</p>
+              <div style="display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:4px">
+                <a href="https://github.com/Martyris/BiblioPLEX/releases/latest/download/BiblioPLEX-win.zip" style="display:inline-flex; align-items:center; height:50px; padding:0 26px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#7C6FEF; color:#0C0C11; font-size:15.5px; font-weight:700; text-decoration:none">Download the portable build</a>
+                <a href="https://github.com/Martyris/BiblioPLEX" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; height:50px; padding:0 24px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#14141A; border:1px solid #2F2F3A; color:#E8E8EF; font-size:15.5px; font-weight:600; text-decoration:none">Build from source</a>
+                <a href="https://www.patreon.com/cw/Martyris" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; height:50px; padding:0 24px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#14141A; border:1px solid #2F2F3A; color:#E8E8EF; font-size:15.5px; font-weight:600; text-decoration:none">Support on Patreon</a>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:18px; background:#1E1E26; border:1px solid #2F2F3A; border-radius:10px; padding:36px 38px">
+              <h2 style="margin:0; font-family:Sora,'Segoe UI',system-ui,sans-serif; font-size:28px; font-weight:600; letter-spacing:-0.02em">Found a bug?</h2>
+              <p style="margin:0; font-size:15.5px; line-height:1.65; color:#9A9AAB; text-wrap:pretty">Open an issue on GitHub — a screenshot and what you were doing is plenty. Feature requests and pull requests are welcome too; it's MIT licensed and there's a lot of Magic to cover.</p>
+              <a href="https://github.com/Martyris/BiblioPLEX/issues" target="_blank" rel="noopener" style="align-self:flex-start; display:inline-flex; align-items:center; height:44px; padding:0 22px; border-radius:999px; white-space:nowrap; flex-shrink:0; background:#14141A; border:1px solid #2F2F3A; color:#E8E8EF; font-size:15px; font-weight:600; text-decoration:none">Open an issue</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- footer -->
+        <div style="display:flex; flex-direction:column; gap:26px; padding:44px 40px 48px; border-top:1px solid #2F2F3A; background:#14141A">
+          <div style="display:flex; flex-wrap:wrap; align-items:baseline; gap:22px">
+            <span style="font-family:ui-monospace,Consolas,monospace; font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#9A9AAB">Powered by</span>
+            <div style="display:flex; flex-wrap:wrap; gap:22px; font-size:14.5px">
+              <a href="https://scryfall.com">Scryfall</a>
+              <a href="https://edhrec.com">EDHREC</a>
+              <a href="https://commanderspellbook.com">Commander Spellbook</a>
+              <a href="http://xmage.today">XMage</a>
+            </div>
+            <span style="font-size:14px; color:#9A9AAB">Card data and images from Scryfall; recommendations and precon lists from EDHREC; combo data from Commander Spellbook; the playtest rules engine is XMage. Credited as plain text, per their usage policies.</span>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap:24px; padding-top:22px; border-top:1px solid #2F2F3A">
+            <div style="display:flex; align-items:center; gap:10px">
+              <img src="assets/logo.png" alt="" style="width:22px; height:22px; display:block">
+              <span style="font-size:14px; color:#9A9AAB">BiblioPLEX — free and open source, MIT licensed. <a href="https://github.com/Martyris/BiblioPLEX" target="_blank" rel="noopener">github.com/Martyris/BiblioPLEX</a></span>
+            </div>
+            <span style="font-size:13.5px; color:#9A9AAB">Built with the assistance of Claude Code.</span>
+          </div>
+          <p style="margin:0; max-width:900px; font-size:14px; line-height:1.7; color:#9A9AAB; text-wrap:pretty">BiblioPLEX is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.</p>
+        </div>
+      </div>
+</div>
+
+</body>
+</html>
