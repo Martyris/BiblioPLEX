@@ -94,10 +94,24 @@ export async function downloadUpdate(
   return destPath
 }
 
+// The env var main/index.ts's own cleanupOldExeIfRequested looks for on startup — named for
+// what it holds, not what reads it, since the reader lives in a process that doesn't exist yet
+// at the point this is set. Exported so both ends of this handoff share one literal.
+export const DELETE_OLD_EXE_ENV_VAR = 'BIBLIOPLEX_DELETE_OLD_EXE'
+
 // Launches the freshly-downloaded portable exe as its own detached process, then quits this
 // one — there's no "install directory" to update in place for a portable build, so the update
-// is really just "run the new copy, close the old one."
+// is really just "run the new copy, close the old one." Also hands the new process this one's
+// own exe path (PORTABLE_EXECUTABLE_FILE — the real file the user double-clicked, not
+// app.getPath('exe')'s ephemeral %TEMP% extraction) via an env var, so the new process can
+// delete it once this one has actually exited and released its file lock — otherwise every
+// update leaves the previous version's exe sitting right next to the new one forever.
 export function installUpdate(filePath: string): void {
-  spawn(filePath, [], { detached: true, stdio: 'ignore' }).unref()
+  const oldExePath = process.env.PORTABLE_EXECUTABLE_FILE
+  spawn(filePath, [], {
+    detached: true,
+    stdio: 'ignore',
+    env: oldExePath ? { ...process.env, [DELETE_OLD_EXE_ENV_VAR]: oldExePath } : process.env
+  }).unref()
   app.quit()
 }

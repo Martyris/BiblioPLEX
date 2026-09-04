@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join, dirname } from 'path'
-import { readFile, writeFile } from 'fs/promises'
+import { join, dirname, normalize } from 'path'
+import { readFile, writeFile, unlink } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
   searchCards,
@@ -87,7 +87,7 @@ import {
   setSchool,
   type School
 } from './accounts'
-import { checkForUpdate, downloadUpdate, installUpdate, type UpdateInfo } from './updater'
+import { checkForUpdate, downloadUpdate, installUpdate, DELETE_OLD_EXE_ENV_VAR, type UpdateInfo } from './updater'
 
 // Portable-style storage: packaged builds keep decks.json/accounts.json/precons.json/the card-
 // tag index in a "data" folder next to wherever the .exe is actually being run from, instead of
@@ -107,6 +107,32 @@ if (!is.dev) {
   const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
   const baseDir = portableDir ?? dirname(app.getPath('exe'))
   app.setPath('userData', join(baseDir, 'data'))
+}
+
+// After an in-app update (see updater.ts's installUpdate), the OLD version's exe is still
+// sitting right next to the new one — it can't delete itself while running, so it hands this
+// (newly-launched) process its own path via an env var and trusts this process to finish the
+// job. The old process needs a moment to actually exit and release its exe's execution lock
+// after quitting, so a delete attempt failing isn't the end of it — a few retries with a short
+// wait between them covers that without ever blocking startup on it.
+async function cleanupOldExeIfRequested(): Promise<void> {
+  const oldExePath = process.env[DELETE_OLD_EXE_ENV_VAR]
+  if (!oldExePath) return
+  // Guards against ever deleting the exe this very process is running from, however that could
+  // theoretically happen (e.g. an update "to" the same version already running).
+  const currentExePath = process.env.PORTABLE_EXECUTABLE_FILE ?? app.getPath('exe')
+  // Windows paths are case-insensitive — a straight string comparison would miss a same-file
+  // match that only differs by case.
+  if (normalize(oldExePath).toLowerCase() === normalize(currentExePath).toLowerCase()) return
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await unlink(oldExePath)
+      return
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  }
 }
 
 function createWindow(): void {
@@ -150,6 +176,9 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.biblioplex.app')
+  // Fire-and-forget — it retries for up to ~5s on its own and has nothing to do with getting a
+  // window on screen, so there's no reason to hold up startup on it.
+  void cleanupOldExeIfRequested()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
