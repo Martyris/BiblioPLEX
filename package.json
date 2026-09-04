@@ -1,6 +1,6 @@
 {
   "name": "biblioplex",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "BiblioPLEX — MTG deck building, card info, and recommendations desktop app",
   "main": "./out/main/index.js",
   "author": "Martyris",
@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/pdfkit": "^0.17.6",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^5.2.0",
@@ -31,13 +32,18 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.20.2",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "sharp": "^0.35.4"
   },
   "build": {
     "appId": "com.biblioplex.app",
     "productName": "BiblioPLEX",
-    "files": ["out/**/*"],
+    "files": [
+      "out/**/*"
+    ],
     "extraResources": [
       {
         "from": "java-bridge/target/java-bridge-1.0-jar-with-dependencies.jar",
@@ -54,6 +60,10 @@
       {
         "from": "resources/combo-index",
         "to": "combo-index"
+      },
+      {
+        "from": "resources/pdf-logo.png",
+        "to": "pdf-assets/logo.png"
       }
     ],
     "win": {

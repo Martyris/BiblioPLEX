@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "types": ["electron-vite/node"],
     "resolveJsonModule": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true

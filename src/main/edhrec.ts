@@ -73,8 +73,21 @@ function slugify(name: string): string {
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
+    // EDHREC drops apostrophes outright rather than treating them as a word separator —
+    // "Y'shtola, Night's Blessed" -> "yshtola-nights-blessed", NOT "y-shtola-night-s-blessed"
+    // (confirmed by hand against edhrec.com). Falling through to the general non-alnum-to-"-"
+    // rule below without this first is why every possessive/contraction commander name (Yshtola,
+    // Yuriko, Sephiroth Planet's Heir, ...) 404'd — this was a real, reported bug, not a guess.
+    .replace(/['’]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
+}
+
+// MDFC/split/adventure cards carry a combined "Front // Back" name at the top level (Scryfall's
+// own `name` field) — EDHREC only ever has a page for the front (commander-legal) face, never
+// the combined string or the back face alone. Plain single-faced names pass through unchanged.
+function frontFaceName(name: string): string {
+  return name.split(' // ')[0]
 }
 
 function toEdhrecError(err: unknown): EdhrecError {
@@ -131,7 +144,7 @@ export async function getCommanderData(
   cardName: string,
   tagSlug?: string
 ): Promise<EdhrecCommanderData | EdhrecError> {
-  const slug = slugify(cardName)
+  const slug = slugify(frontFaceName(cardName))
   const cacheKey = `commander:${slug}:${tagSlug ?? ''}`
   const cached = cache.get(cacheKey)
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
@@ -208,7 +221,7 @@ const MAX_INDEXED_TAGS = 30
 const TAG_INDEX_CACHE_TTL_MS = 6 * 60 * 60 * 1000 // 6 hours — this is a heavy computation
 
 export async function getCommanderTagIndex(cardName: string): Promise<CommanderTagIndex | EdhrecError> {
-  const slug = slugify(cardName)
+  const slug = slugify(frontFaceName(cardName))
   const cacheKey = `tagindex:${slug}`
   const cached = cache.get(cacheKey)
   if (cached && Date.now() - cached.at < TAG_INDEX_CACHE_TTL_MS) {

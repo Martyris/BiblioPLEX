@@ -508,7 +508,16 @@ body {
   border: none;
   padding: 0;
   cursor: pointer;
-  border-radius: 10px;
+  /* Measured directly against Scryfall's own "normal" JPEGs (not a guess this time): every card
+     checked has ~1.64% of its width as a plain white fill outside the physical card's rounded
+     corner — a fixed characteristic of how Scryfall renders that format, not a per-scan defect.
+     .card-grid's tiles can grow well past 250px (minmax(250px, 1fr) on a wide results column),
+     and 10px stops being enough once a tile clears ~610px wide. Unlike a scale/crop overscan
+     (tried and reverted — it cut into real card frame and text along the STRAIGHT edges), a
+     bigger radius only ever affects the corner arcs themselves, so it can't eat into an edge's
+     content no matter how generous it is. 14px covers tiles up to ~850px wide.
+  */
+  border-radius: 14px;
   overflow: hidden;
   transition: transform 0.1s ease;
 }
@@ -819,7 +828,9 @@ body {
 .card-tile img {
   width: 100%;
   display: block;
-  border-radius: 10px;
+  aspect-ratio: 63 / 88;
+  object-fit: cover;
+  border-radius: 14px;
 }
 
 .card-tile.is-in-deck img {
@@ -986,6 +997,11 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* A short OK-only notice (import/export results) doesn't need the full paste-modal width. */
+.info-modal {
+  max-width: 420px;
 }
 
 .export-deck-modal__textarea {
@@ -4490,6 +4506,23 @@ body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* Inline success flash next to a heading (e.g. "Import / Export" after a clipboard copy) —
+   always present in the DOM so the opacity transition can fade it out; never mounts/unmounts,
+   so it never shifts surrounding layout the way a below-the-buttons status line did. */
+.copy-check {
+  display: inline-block;
+  margin-left: 6px;
+  color: #7ee787;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.copy-check.is-visible {
+  opacity: 1;
+  transition: opacity 0.15s ease;
 }
 
 /* Decks list */

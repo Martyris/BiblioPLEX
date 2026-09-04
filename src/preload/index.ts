@@ -25,6 +25,33 @@ interface UpdateInfo {
   releaseUrl: string
 }
 
+interface DecklistPdfEntry {
+  count: number
+  name: string
+  set: string
+  collectorNumber: string
+  foil: boolean
+  isCommander: boolean
+  isBasicLand: boolean
+  imageUrl: string
+}
+
+interface DecklistPdfGroup {
+  label: string
+  color: string
+  entries: DecklistPdfEntry[]
+}
+
+interface DecklistPdfOptions {
+  deckName: string
+  commanderArtUrl: string | null
+  colorIdentity: string[]
+  identityName: string
+  bracket: number | null
+  accountName: string | null
+  groups: DecklistPdfGroup[]
+}
+
 interface GameSimSeatMeta {
   engineName: string
   deckName: string
@@ -66,6 +93,8 @@ const api = {
   fetchScryfallUrl: (url: string) => ipcRenderer.invoke('scryfall:url', url),
   getCardsByIds: (ids: string[]) => ipcRenderer.invoke('scryfall:collection', ids),
   getCardsByNames: (names: string[]) => ipcRenderer.invoke('scryfall:collection-by-name', names),
+  getCardsBySetAndNumber: (pairs: { set: string; collectorNumber: string }[]) =>
+    ipcRenderer.invoke('scryfall:collection-by-set-number', pairs),
   getCommanderData: (cardName: string, tagSlug?: string) =>
     ipcRenderer.invoke('edhrec:commander', cardName, tagSlug),
   getTopCommanders: () => ipcRenderer.invoke('edhrec:top-commanders'),
@@ -85,6 +114,9 @@ const api = {
   deleteDeck: (id: string) => ipcRenderer.invoke('decks:delete', id),
   duplicateDeck: (id: string) => ipcRenderer.invoke('decks:duplicate', id),
   reorderDecks: (orderedIds: string[]) => ipcRenderer.invoke('decks:reorder', orderedIds),
+  exportDeckPdf: (pdfOptions: DecklistPdfOptions) =>
+    ipcRenderer.invoke('decks:export-pdf', pdfOptions) as Promise<string | null>,
+  pickAndExtractImportPdf: () => ipcRenderer.invoke('decks:pick-import-pdf') as Promise<string | null>,
   getPreconStatus: () => ipcRenderer.invoke('precons:status'),
   getPreconBuildProgress: () => ipcRenderer.invoke('precons:build-progress'),
   buildPreconLibrary: () => ipcRenderer.invoke('precons:build'),

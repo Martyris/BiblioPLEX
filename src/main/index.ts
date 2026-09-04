@@ -1,5 +1,6 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
+import { readFile, writeFile } from 'fs/promises'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
   searchCards,
@@ -7,6 +8,7 @@ import {
   getCardByFuzzyName,
   getCardsByIds,
   getCardsByNames,
+  getCardsBySetAndNumber,
   getSets,
   fetchScryfallUrl,
   autocompleteCardNames,
@@ -15,6 +17,7 @@ import {
   getLocalizedCardArt,
   type SearchOptions
 } from './scryfall'
+import { generateDecklistPdf, extractPdfText, sanitizeFileName, type DecklistPdfOptions } from './deckExport'
 import { setMainLocale } from './localePreference'
 import { getCommanderData, getTopCommanders, getCommanderTagIndex } from './edhrec'
 import { findMyCombos } from './commanderSpellbook'
@@ -208,6 +211,10 @@ app.whenReady().then(() => {
     return getCardsByNames(names)
   })
 
+  ipcMain.handle('scryfall:collection-by-set-number', async (_event, pairs: { set: string; collectorNumber: string }[]) => {
+    return getCardsBySetAndNumber(pairs)
+  })
+
   ipcMain.handle('decks:list', async () => {
     return listDecks()
   })
@@ -244,6 +251,33 @@ app.whenReady().then(() => {
 
   ipcMain.handle('decks:reorder', async (_event, orderedIds: string[]) => {
     return reorderDecks(orderedIds)
+  })
+
+  ipcMain.handle('decks:export-pdf', async (event, pdfOptions: DecklistPdfOptions) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const dialogOptions = {
+      title: 'Export Decklist PDF',
+      defaultPath: `${sanitizeFileName(pdfOptions.deckName)}.pdf`,
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, dialogOptions) : await dialog.showSaveDialog(dialogOptions)
+    if (result.canceled || !result.filePath) return null
+    const buffer = await generateDecklistPdf(pdfOptions)
+    await writeFile(result.filePath, buffer)
+    return result.filePath
+  })
+
+  ipcMain.handle('decks:pick-import-pdf', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const dialogOptions = {
+      title: 'Import Decklist PDF',
+      properties: ['openFile' as const],
+      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    }
+    const result = win ? await dialog.showOpenDialog(win, dialogOptions) : await dialog.showOpenDialog(dialogOptions)
+    if (result.canceled || result.filePaths.length === 0) return null
+    const buffer = await readFile(result.filePaths[0])
+    return extractPdfText(buffer)
   })
 
   ipcMain.handle('precons:status', async () => {

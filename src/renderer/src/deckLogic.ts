@@ -482,6 +482,86 @@ export function groupDeckCards(cards: ScryfallCard[], mode: DeckGroupMode): Cate
   }
 }
 
+export interface DecklistPdfEntry {
+  count: number
+  name: string
+  set: string
+  collectorNumber: string
+  foil: boolean
+  isCommander: boolean
+  isBasicLand: boolean
+  imageUrl: string
+}
+
+export interface DecklistPdfGroup {
+  label: string
+  color: string
+  entries: DecklistPdfEntry[]
+}
+
+/** Builds the grouped, cost-sorted, image-carrying structure Export Deck List (PDF) hands to
+ *  the main process for typesetting a visual card sheet — the standard type categories
+ *  (groupCardsByCategory's own order and dash colors), each sorted by mana value ascending
+ *  ("divided by groups type, ordered within groups by cost from lowest to highest"), except
+ *  that the commander(s) always lead whichever category they land in (almost always Creatures)
+ *  rather than sitting in their own separate section — commanders are folded into the same
+ *  groupCardsByCategory pass as deckCards precisely so they land in their correct category
+ *  instead of needing a synthetic one. `foilOf` mirrors DeckBuilder's own foilKeyFor/occurrence
+ *  scheme so a duplicate basic's later copies aren't all reported under the first copy's foil
+ *  status; `imageUrl` resolves a printing to the thumbnail the PDF actually embeds. */
+export function buildDecklistPdfGroups(
+  commanders: { card: ScryfallCard; foil: boolean }[],
+  deckCards: ScryfallCard[],
+  foilOf: (card: ScryfallCard, occurrence: number) => boolean,
+  imageUrl: (card: ScryfallCard) => string
+): DecklistPdfGroup[] {
+  const commanderOracleIds = new Set(commanders.map((c) => c.card.oracle_id))
+
+  const occurrenceCount = new Map<string, number>()
+  const deckWithFoil = deckCards.map((card) => {
+    const occurrence = occurrenceCount.get(card.id) ?? 0
+    occurrenceCount.set(card.id, occurrence + 1)
+    return { card, foil: foilOf(card, occurrence) }
+  })
+  const allWithFoil = [...commanders, ...deckWithFoil]
+
+  function makeEntries(cardsAndFoil: { card: ScryfallCard; foil: boolean }[]): DecklistPdfEntry[] {
+    const counts = new Map<string, DecklistPdfEntry>()
+    for (const { card, foil } of cardsAndFoil) {
+      const key = `${card.name}|||${card.set}|||${card.collector_number}|||${foil}`
+      const existing = counts.get(key)
+      if (existing) existing.count++
+      else
+        counts.set(key, {
+          count: 1,
+          name: card.name,
+          set: card.set,
+          collectorNumber: card.collector_number,
+          foil,
+          isCommander: commanderOracleIds.has(card.oracle_id),
+          isBasicLand: isBasicLand(card),
+          imageUrl: imageUrl(card)
+        })
+    }
+    // Stable sort: alphabetical first, then commander(s) pulled to the front — preserves
+    // alphabetical order among the rest while still guaranteeing "commander leads the block."
+    return [...counts.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => Number(b.isCommander) - Number(a.isCommander))
+  }
+
+  const groups: DecklistPdfGroup[] = []
+  for (const categoryGroup of groupCardsByCategory([...commanders.map((c) => c.card), ...deckCards])) {
+    const inGroup = allWithFoil.filter((wf) => categoryGroup.cards.includes(wf.card))
+    const sortedByCost = [...inGroup].sort(
+      (a, b) => (a.card.cmc ?? 0) - (b.card.cmc ?? 0) || a.card.name.localeCompare(b.card.name)
+    )
+    groups.push({ label: categoryGroup.label, color: categoryGroup.dashColor ?? '#9a9aab', entries: makeEntries(sortedByCost) })
+  }
+
+  return groups
+}
+
 export interface DerivedToken {
   id: string
   name: string

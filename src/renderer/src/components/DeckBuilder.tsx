@@ -20,6 +20,7 @@ import {
   addIdToList,
   BASIC_LAND_COLOR,
   basicLandNamesForIdentity,
+  buildDecklistPdfGroups,
   CARD_CATEGORIES,
   categorizeCard,
   countBasicLands,
@@ -40,6 +41,7 @@ import {
 } from '../deckLogic'
 import CardContextMenu from './CardContextMenu'
 import { scryfallImageUrl } from '../scryfallImage'
+import { colorIdentityName } from '../colorIdentityName'
 import { winRate, winRateColor } from '../winRate'
 import { bracketColor } from '../bracketColor'
 import { detectSecondCommanderMode, secondCommanderQuery } from '../partnerEligibility'
@@ -63,6 +65,31 @@ const BRACKET_LABELS: Record<Bracket, string> = {
   3: 'Upgraded',
   4: 'Optimized',
   5: 'cEDH'
+}
+
+type ImportMode = 'plaintext' | 'moxfield' | 'arena' | 'mtgo'
+
+const IMPORT_MODE_LABELS: Record<ImportMode, string> = {
+  plaintext: 'Plain Text',
+  moxfield: 'Moxfield',
+  arena: 'Arena',
+  mtgo: 'MTGO'
+}
+
+const IMPORT_MODE_HINTS: Record<ImportMode, string> = {
+  plaintext: 'Paste a plain decklist ("count name" per line, commander included — the same format Copy Plain Text produces).',
+  moxfield:
+    'Paste a Moxfield decklist ("count name (SET) number", with an optional trailing *F* for foil — the same format Copy for Moxfield produces).',
+  arena:
+    'Paste an Arena decklist (the "About" / "Commander" / "Deck" sections Arena\'s own export produces — the header lines are ignored).',
+  mtgo: 'Paste an MTGO decklist ("count name" per line, main deck first, then a blank line, then the commander).'
+}
+
+const IMPORT_MODE_PLACEHOLDERS: Record<ImportMode, string> = {
+  plaintext: '1 Doctor Doom, King of Latveria\n1 Sol Ring\n1 Command Tower\n9 Island\n…',
+  moxfield: '1 Doctor Doom, King of Latveria (MSC) 880 *F*\n1 Sol Ring (LTC) 15\n9 Island (LTC) 314\n…',
+  arena: 'About\nName Doctor Doom, King of Latveria\n\nCommander\n1 Doctor Doom, King of Latveria\n\nDeck\n1 Sol Ring\n9 Island\n…',
+  mtgo: '1 Sol Ring\n9 Island\n…\n\n1 Doctor Doom, King of Latveria'
 }
 
 const ALL_CATEGORIES: CardCategory[] = [...CARD_CATEGORIES, 'Other']
@@ -279,8 +306,11 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
 
   const [deckTagFilter, setDeckTagFilter] = useState<string | null>(null)
   const [importModalOpen, setImportModalOpen] = useState(false)
+  const [importMode, setImportMode] = useState<ImportMode>('plaintext')
   const [importText, setImportText] = useState('')
   const [importing, setImporting] = useState(false)
+  const [importingPdf, setImportingPdf] = useState(false)
+  const [importMenuAnchor, setImportMenuAnchor] = useState<{ x: number; y: number } | null>(null)
   const [importResult, setImportResult] = useState<{
     added: number
     removed: string[]
@@ -289,9 +319,10 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     skippedCommander: string[]
     notFound: string[]
   } | null>(null)
-  const [exportModalOpen, setExportModalOpen] = useState(false)
-  const [exportText, setExportText] = useState('')
-  const [exportCopied, setExportCopied] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+  const [exportMenuAnchor, setExportMenuAnchor] = useState<{ x: number; y: number } | null>(null)
+  const [showCopyCheck, setShowCopyCheck] = useState(false)
+  const [infoModal, setInfoModal] = useState<{ title: string; message: string } | null>(null)
   const [logicModalOpen, setLogicModalOpen] = useState(false)
   const [logicText, setLogicText] = useState('')
   const [logicError, setLogicError] = useState<string | null>(null)
@@ -887,7 +918,7 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
   }
 
   // "2 Sol Ring" / "2x Sol Ring" / a bare "Sol Ring" (implicit count 1) — matches the format
-  // the Decks list's own Export Deck produces, so a round-trip export→import just works.
+  // Export Deck List (Simplified) produces, so a round-trip export→import just works.
   function parseImportLines(text: string): { count: number; name: string }[] {
     const entries: { count: number; name: string }[] = []
     for (const rawLine of text.split('\n')) {
@@ -899,133 +930,365 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     return entries
   }
 
-  // The imported list is treated as the deck's new target state, not an addition to it:
+  interface ParsedDetailedLine {
+    count: number
+    name: string
+    set: string
+    collectorNumber: string
+    foil: boolean
+  }
+
+  // "1 Doctor Doom, King of Latveria (MSC) 880 *F*" — the format Export Deck List (Detailed)
+  // produces. Every line Export Deck List (PDF) prints is this exact same text, so this one
+  // parser also underlies Import Deck List (PDF) (see handleImportDeckPdf) — extract the PDF's
+  // text and run it through here unchanged. Foil marker and the "x" after count are optional.
+  const DETAILED_LINE_RE = /^(\d+)\s*x?\s+(.+?)\s+\(([A-Za-z0-9]+)\)\s+(\S+?)(\s*\*F\*)?$/i
+
+  function parseDetailedLines(text: string): ParsedDetailedLine[] {
+    const entries: ParsedDetailedLine[] = []
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const match = line.match(DETAILED_LINE_RE)
+      if (!match) continue
+      entries.push({
+        count: Math.max(1, parseInt(match[1], 10)),
+        name: match[2].trim(),
+        set: match[3].toLowerCase(),
+        collectorNumber: match[4],
+        foil: Boolean(match[5])
+      })
+    }
+    return entries
+  }
+
+  interface ResolvedImportSlot {
+    card: ScryfallCard
+    foil: boolean
+  }
+
+  // The imported list is treated as the deck's new target state, not an addition to it — shared
+  // by every import source (simplified paste, detailed paste, PDF):
   // - a non-basic already in the deck stays exactly as it is (its printing untouched);
   // - a non-basic in the deck but NOT in the imported list is pulled out and moved to the
   //   Card Pool (not deleted — you still own it, it just isn't in this build anymore);
-  // - a non-basic in the imported list but not currently in the deck is added, resolved in
-  //   one or two batched Scryfall calls (see getCardsByNames);
+  // - a non-basic in the imported list but not currently in the deck is added, using whichever
+  //   printing the caller already resolved for it (most-recent-by-name for simplified, the
+  //   exact printing named in the list for detailed/PDF);
   // - basics are re-synced by name+count from scratch (any basic name the import doesn't
-  //   mention is zeroed out), reusing whichever printing id the deck already had for that
-  //   name so an alt-art basic isn't silently swapped back to a default one.
-  // Cards matching this deck's own commander/partner are skipped — a common case when
-  // re-importing this deck's own export, which lists the commander as its own line.
-  async function handleImportDeck(): Promise<void> {
-    if (!storedDeck) return
-    const entries = parseImportLines(importText)
-    if (entries.length === 0) return
+  //   mention is zeroed out), reusing whichever printing id the deck already had for that name
+  //   so an alt-art basic isn't silently swapped back to a default one; a name with no existing
+  //   copy uses the caller-resolved printing when explicitPrinting is set, else the same themed
+  //   "+"-stepper lookup simplified import always used.
+  // - when applyFoil is set (detailed/PDF only — the simplified format carries no foil info),
+  //   every slot's foil flag is written to foilIds, including for cards that were already in
+  //   the deck — editing a detailed export's "*F*" markers and reimporting is how foil status
+  //   gets toggled from outside the app.
+  // Cards matching this deck's own commander/partner are skipped as main-deck slots — a common
+  // case when re-importing this deck's own export, which lists the commander as its own line —
+  // but still update the commander's own foil status when applyFoil is set.
+  async function applyImportedSlots(
+    slots: ResolvedImportSlot[],
+    notFound: string[],
+    options: { explicitPrinting: boolean; applyFoil: boolean }
+  ): Promise<NonNullable<typeof importResult>> {
+    if (!storedDeck) throw new Error('applyImportedSlots called with no deck loaded')
+    const deck = storedDeck
+    const commanderNamesLower = new Set(
+      [deck.commanderName, deck.partnerCommanderName].filter((n): n is string => Boolean(n)).map((n) => n.toLowerCase())
+    )
 
-    setImporting(true)
-    try {
-      const uniqueNames = [...new Set(entries.map((e) => e.name))]
-      const result = await window.api.getCardsByNames(uniqueNames)
-      if (isError(result)) {
-        window.alert(`Could not resolve cards: ${result.details}`)
-        return
-      }
-      const { data, not_found } = result as { data: ScryfallCard[]; not_found?: string[] }
-      const cardByLowerName = new Map(data.map((c) => [c.name.toLowerCase(), c]))
-      const commanderNamesLower = new Set(
-        [storedDeck.commanderName, storedDeck.partnerCommanderName]
-          .filter((n): n is string => Boolean(n))
-          .map((n) => n.toLowerCase())
-      )
+    const importedBasicSlots = new Map<string, boolean[]>()
+    const importedBasicExplicitCard = new Map<string, ScryfallCard>()
+    const importedOracleIds = new Set<string>()
+    const importedNonBasicByOracleId = new Map<string, ScryfallCard>()
+    const importedNonBasicFoilByOracleId = new Map<string, boolean>()
 
-      const importedBasicCounts = new Map<string, number>()
-      const importedOracleIds = new Set<string>()
-      const importedNonBasicByOracleId = new Map<string, ScryfallCard>()
+    const outsideIdentity: string[] = []
+    const banned: string[] = []
+    const skippedCommander: string[] = []
+    const foilKeysToSet = new Map<string, boolean>()
 
-      const outsideIdentity: string[] = []
-      const banned: string[] = []
-      const skippedCommander: string[] = []
-
-      for (const entry of entries) {
-        const card = cardByLowerName.get(entry.name.toLowerCase())
-        if (!card) continue
-
-        if (commanderNamesLower.has(card.name.toLowerCase())) {
-          if (!skippedCommander.includes(card.name)) skippedCommander.push(card.name)
-          continue
+    for (const { card, foil } of slots) {
+      if (commanderNamesLower.has(card.name.toLowerCase())) {
+        if (!skippedCommander.includes(card.name)) skippedCommander.push(card.name)
+        if (options.applyFoil) {
+          if (card.name.toLowerCase() === deck.commanderName.toLowerCase()) {
+            foilKeysToSet.set(deck.commanderId, foil)
+          } else if (deck.partnerCommanderId) {
+            foilKeysToSet.set(deck.partnerCommanderId, foil)
+          }
         }
+        continue
+      }
 
-        if (isBasicLand(card)) {
-          importedBasicCounts.set(card.name, (importedBasicCounts.get(card.name) ?? 0) + entry.count)
-        } else {
-          importedOracleIds.add(card.oracle_id)
-          if (!importedNonBasicByOracleId.has(card.oracle_id)) importedNonBasicByOracleId.set(card.oracle_id, card)
+      if (isBasicLand(card)) {
+        importedBasicSlots.set(card.name, [...(importedBasicSlots.get(card.name) ?? []), foil])
+        if (!importedBasicExplicitCard.has(card.name)) importedBasicExplicitCard.set(card.name, card)
+      } else {
+        importedOracleIds.add(card.oracle_id)
+        if (!importedNonBasicByOracleId.has(card.oracle_id)) {
+          importedNonBasicByOracleId.set(card.oracle_id, card)
+          importedNonBasicFoilByOracleId.set(card.oracle_id, foil)
         }
-
-        const reason = getIllegalReason(card, deckColorIdentity)
-        if (reason === 'banned' && !banned.includes(card.name)) banned.push(card.name)
-        else if (reason === 'color-identity' && !outsideIdentity.includes(card.name)) outsideIdentity.push(card.name)
       }
 
-      const currentNonBasics = deckCards.filter((c) => !isBasicLand(c))
-      const keptNonBasics = currentNonBasics.filter((c) => importedOracleIds.has(c.oracle_id))
-      const removedNonBasics = currentNonBasics.filter((c) => !importedOracleIds.has(c.oracle_id))
-      const keptOracleIds = new Set(keptNonBasics.map((c) => c.oracle_id))
-      const addedNonBasics = [...importedNonBasicByOracleId.values()].filter((c) => !keptOracleIds.has(c.oracle_id))
+      const reason = getIllegalReason(card, deckColorIdentity)
+      if (reason === 'banned' && !banned.includes(card.name)) banned.push(card.name)
+      else if (reason === 'color-identity' && !outsideIdentity.includes(card.name)) outsideIdentity.push(card.name)
+    }
 
-      const currentBasicIdsByName = new Map<string, string[]>()
-      for (const c of deckCards.filter(isBasicLand)) {
-        currentBasicIdsByName.set(c.name, [...(currentBasicIdsByName.get(c.name) ?? []), c.id])
-      }
-      const finalBasicIds: string[] = []
-      const newlyResolvedBasics: ScryfallCard[] = []
-      for (const [name, targetCount] of importedBasicCounts) {
-        const existingIds = currentBasicIdsByName.get(name) ?? []
-        let fallbackId = existingIds[0]
+    const currentNonBasics = deckCards.filter((c) => !isBasicLand(c))
+    const keptNonBasics = currentNonBasics.filter((c) => importedOracleIds.has(c.oracle_id))
+    const removedNonBasics = currentNonBasics.filter((c) => !importedOracleIds.has(c.oracle_id))
+    const keptOracleIds = new Set(keptNonBasics.map((c) => c.oracle_id))
+    const addedNonBasics = [...importedNonBasicByOracleId.values()].filter((c) => !keptOracleIds.has(c.oracle_id))
+
+    const currentBasicIdsByName = new Map<string, string[]>()
+    for (const c of deckCards.filter(isBasicLand)) {
+      currentBasicIdsByName.set(c.name, [...(currentBasicIdsByName.get(c.name) ?? []), c.id])
+    }
+    const finalBasicIds: string[] = []
+    const newlyResolvedBasics: ScryfallCard[] = []
+
+    for (const [name, foilFlags] of importedBasicSlots) {
+      const existingIds = currentBasicIdsByName.get(name) ?? []
+      let fallbackId = existingIds[0]
+      if (!fallbackId) {
+        // No copy of this basic already in the deck to reuse the printing from. Detailed/PDF
+        // imports already named an exact printing — honor it. Simplified import never carries
+        // one, so fall back to the same themed lookup the "+" stepper under Basic Lands uses
+        // (commander's own set, else its sibling main set, else nearest release date).
+        if (options.explicitPrinting) {
+          const explicit = importedBasicExplicitCard.get(name)
+          if (explicit) {
+            fallbackId = explicit.id
+            newlyResolvedBasics.push(explicit)
+          }
+        }
         if (!fallbackId) {
-          // No copy of this basic already in the deck to reuse the printing from — pick one
-          // the same way the "+" stepper under Basic Lands does (commander's own set, else its
-          // sibling main set, else nearest release date), not whatever generic printing the
-          // bulk name lookup above happened to resolve to.
           const themed = await findDefaultBasicPrinting(name)
-          const resolved = themed ?? cardByLowerName.get(name.toLowerCase()) ?? null
+          const resolved = themed ?? importedBasicExplicitCard.get(name) ?? null
           if (resolved) {
             fallbackId = resolved.id
             newlyResolvedBasics.push(resolved)
           }
         }
-        for (let i = 0; i < targetCount; i++) {
-          const id = existingIds[i] ?? fallbackId
-          if (id) finalBasicIds.push(id)
+      }
+      const idOccurrence = new Map<string, number>()
+      for (let i = 0; i < foilFlags.length; i++) {
+        const id = existingIds[i] ?? fallbackId
+        if (!id) continue
+        finalBasicIds.push(id)
+        if (options.applyFoil) {
+          const occ = idOccurrence.get(id) ?? 0
+          idOccurrence.set(id, occ + 1)
+          foilKeysToSet.set(foilKeyFor(id, occ), foilFlags[i])
         }
       }
+    }
 
-      const nextCardIds = [...keptNonBasics.map((c) => c.id), ...addedNonBasics.map((c) => c.id), ...finalBasicIds]
+    const nextCardIds = [...keptNonBasics.map((c) => c.id), ...addedNonBasics.map((c) => c.id), ...finalBasicIds]
 
-      // Removed non-basics move to the Card Pool rather than vanishing; newly added ones fold
-      // in too (and drop off Want) — both match how a normal single-card add already behaves.
-      const cardPoolIds = new Set(storedDeck.cardPoolIds)
-      for (const c of removedNonBasics) cardPoolIds.add(c.id)
-      for (const c of addedNonBasics) cardPoolIds.add(c.id)
-      const addedIds = new Set(addedNonBasics.map((c) => c.id))
-      const wantIds = storedDeck.wantIds.filter((id) => !addedIds.has(id))
+    if (options.applyFoil) {
+      // A non-basic can't have more than one copy (singleton), so occurrence 0 is always right.
+      for (const c of [...keptNonBasics, ...addedNonBasics]) {
+        const foil = importedNonBasicFoilByOracleId.get(c.oracle_id)
+        if (foil !== undefined) foilKeysToSet.set(foilKeyFor(c.id, 0), foil)
+      }
+    }
 
-      // deckCards resolves every id in cardIds through this map and drops anything missing —
-      // the newly-picked basic land printings (finalBasicIds) need to be cached here too, or
-      // they're written into cardIds correctly but silently fail to render until the deck is
-      // reopened and cardsById gets rebuilt from scratch via a full getCardsByIds fetch.
-      setCardsById((prev) => {
-        const next = { ...prev }
-        for (const c of cardByLowerName.values()) next[c.id] = c
-        for (const c of newlyResolvedBasics) next[c.id] = c
-        return next
-      })
+    // Removed non-basics move to the Card Pool rather than vanishing; newly added ones fold
+    // in too (and drop off Want) — both match how a normal single-card add already behaves.
+    const cardPoolIds = new Set(deck.cardPoolIds)
+    for (const c of removedNonBasics) cardPoolIds.add(c.id)
+    for (const c of addedNonBasics) cardPoolIds.add(c.id)
+    const addedIds = new Set(addedNonBasics.map((c) => c.id))
+    const wantIds = deck.wantIds.filter((id) => !addedIds.has(id))
 
-      await persist({ cardIds: nextCardIds, cardPoolIds: [...cardPoolIds], wantIds })
+    // deckCards resolves every id in cardIds through this map and drops anything missing —
+    // the newly-picked basic land printings need to be cached here too, or they're written
+    // into cardIds correctly but silently fail to render until the deck is reopened.
+    setCardsById((prev) => {
+      const next = { ...prev }
+      for (const { card } of slots) next[card.id] = card
+      for (const c of newlyResolvedBasics) next[c.id] = c
+      return next
+    })
 
-      setImportResult({
-        added: addedNonBasics.length,
-        removed: removedNonBasics.map((c) => c.name),
-        outsideIdentity,
-        banned,
-        skippedCommander,
-        notFound: not_found ?? []
-      })
+    const patch: Parameters<typeof persist>[0] = { cardIds: nextCardIds, cardPoolIds: [...cardPoolIds], wantIds }
+    if (options.applyFoil) {
+      const nextFoilIds = new Set(deck.foilIds)
+      for (const [key, foil] of foilKeysToSet) {
+        if (foil) nextFoilIds.add(key)
+        else nextFoilIds.delete(key)
+      }
+      patch.foilIds = [...nextFoilIds]
+    }
+    await persist(patch)
+
+    const outcome = {
+      added: addedNonBasics.length,
+      removed: removedNonBasics.map((c) => c.name),
+      outsideIdentity,
+      banned,
+      skippedCommander,
+      notFound
+    }
+    setImportResult(outcome)
+    return outcome
+  }
+
+  // Shared by Plain Text and MTGO (and Arena, after stripArenaHeaders below) — all three
+  // exchange bare "count name" lines; applyImportedSlots already recognizes the commander by
+  // name regardless of where its line sits, so no format needs to mark it specially here.
+  async function resolveNameOnlyLines(text: string): Promise<{ slots: ResolvedImportSlot[]; notFound: string[] } | null> {
+    const entries = parseImportLines(text)
+    if (entries.length === 0) return { slots: [], notFound: [] }
+
+    const uniqueNames = [...new Set(entries.map((e) => e.name))]
+    const result = await window.api.getCardsByNames(uniqueNames)
+    if (isError(result)) {
+      showInfo('Import Failed', `Could not resolve cards: ${result.details}`)
+      return null
+    }
+    const { data, not_found } = result as { data: ScryfallCard[]; not_found?: string[] }
+    const cardByLowerName = new Map(data.map((c) => [c.name.toLowerCase(), c]))
+
+    const slots: ResolvedImportSlot[] = []
+    for (const entry of entries) {
+      const card = cardByLowerName.get(entry.name.toLowerCase())
+      if (!card) continue
+      for (let i = 0; i < entry.count; i++) slots.push({ card, foil: false })
+    }
+    return { slots, notFound: not_found ?? [] }
+  }
+
+  async function handleImportNameOnly(): Promise<void> {
+    if (!storedDeck) return
+    setImporting(true)
+    try {
+      const resolved = await resolveNameOnlyLines(importText)
+      if (!resolved) return
+      await applyImportedSlots(resolved.slots, resolved.notFound, { explicitPrinting: false, applyFoil: false })
     } finally {
       setImporting(false)
+    }
+  }
+
+  // Arena's "About / Name <deck>", "Commander", and "Deck" section headers carry no card data
+  // of their own — strip them down to the bare "count name" lines resolveNameOnlyLines expects.
+  function stripArenaHeaders(text: string): string {
+    const HEADERS = new Set(['about', 'commander', 'deck', 'sideboard', 'companion'])
+    const lines: string[] = []
+    for (const raw of text.split('\n')) {
+      const line = raw.trim()
+      if (!line || HEADERS.has(line.toLowerCase()) || /^name\s+/i.test(line)) continue
+      lines.push(line)
+    }
+    return lines.join('\n')
+  }
+
+  async function handleImportArena(): Promise<void> {
+    if (!storedDeck) return
+    setImporting(true)
+    try {
+      const resolved = await resolveNameOnlyLines(stripArenaHeaders(importText))
+      if (!resolved) return
+      await applyImportedSlots(resolved.slots, resolved.notFound, { explicitPrinting: false, applyFoil: false })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  // Resolves each parsed line to its exact printing via (set, collector number) rather than by
+  // name — see getCardsBySetAndNumber, also used by the Precons library for the same "this
+  // specific printing, not just this card name" reason. Shared by both the paste-in detailed
+  // text flow and Import Deck List (PDF), which produces the identical ParsedDetailedLine shape
+  // from a PDF's extracted text.
+  async function resolveDetailedLines(
+    parsedLines: ParsedDetailedLine[]
+  ): Promise<{ slots: ResolvedImportSlot[]; notFound: string[] } | null> {
+    const pairs = parsedLines.map((l) => ({ set: l.set, collectorNumber: l.collectorNumber }))
+    const result = await window.api.getCardsBySetAndNumber(pairs)
+    if (isError(result)) {
+      showInfo('Import Failed', `Could not resolve cards: ${result.details}`)
+      return null
+    }
+    const { data, not_found } = result as { data: ScryfallCard[]; not_found?: string[] }
+    const notFoundKeys = new Set(not_found ?? [])
+    const slots: ResolvedImportSlot[] = []
+    const notFoundLabels: string[] = []
+    let dataIndex = 0
+    for (const line of parsedLines) {
+      const key = `${line.set}/${line.collectorNumber}`
+      if (notFoundKeys.has(key)) {
+        notFoundLabels.push(`${line.name} (${line.set.toUpperCase()}) ${line.collectorNumber}`)
+        continue
+      }
+      const card = data[dataIndex++]
+      if (!card) continue
+      for (let i = 0; i < line.count; i++) slots.push({ card, foil: line.foil })
+    }
+    return { slots, notFound: notFoundLabels }
+  }
+
+  async function handleImportMoxfield(): Promise<void> {
+    if (!storedDeck) return
+    const parsedLines = parseDetailedLines(importText)
+    if (parsedLines.length === 0) return
+
+    setImporting(true)
+    try {
+      const resolved = await resolveDetailedLines(parsedLines)
+      if (!resolved) return
+      await applyImportedSlots(resolved.slots, resolved.notFound, { explicitPrinting: true, applyFoil: true })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  function importResultSummary(r: NonNullable<typeof importResult>): string {
+    const lines = [`Added ${r.added} card(s).`]
+    if (r.removed.length > 0) lines.push(`Moved to Card Pool: ${r.removed.join(', ')}`)
+    if (r.outsideIdentity.length > 0) lines.push(`Outside color identity: ${r.outsideIdentity.join(', ')}`)
+    if (r.banned.length > 0) lines.push(`Banned in Commander: ${r.banned.join(', ')}`)
+    if (r.skippedCommander.length > 0) lines.push(`Commander (skipped): ${r.skippedCommander.join(', ')}`)
+    if (r.notFound.length > 0) lines.push(`Could not find: ${r.notFound.join(', ')}`)
+    return lines.join('\n')
+  }
+
+  // The "really unique feature" — a decklist PDF only this app's own Export Deck List (PDF)
+  // could have produced round-trips straight back into the deck, since every line it prints is
+  // in the exact format parseDetailedLines expects (see generateDecklistPdf in main/deckExport.ts).
+  async function handleImportDeckPdf(): Promise<void> {
+    if (!storedDeck) return
+    setImportingPdf(true)
+    try {
+      let text: string | null
+      try {
+        text = await window.api.pickAndExtractImportPdf()
+      } catch (err) {
+        showInfo('Import Failed', `Could not read that PDF: ${err instanceof Error ? err.message : String(err)}`)
+        return
+      }
+      if (text === null) return // user canceled the file picker
+
+      const parsedLines = parseDetailedLines(text)
+      if (parsedLines.length === 0) {
+        showInfo(
+          'Import Failed',
+          'Could not find a recognizable decklist in that PDF — it needs to be one produced by BiblioPLEX\'s own "Export Deck List (PDF)".'
+        )
+        return
+      }
+
+      const resolved = await resolveDetailedLines(parsedLines)
+      if (!resolved) return
+      const outcome = await applyImportedSlots(resolved.slots, resolved.notFound, { explicitPrinting: true, applyFoil: true })
+      showInfo('Import Complete', importResultSummary(outcome))
+    } finally {
+      setImportingPdf(false)
     }
   }
 
@@ -1115,30 +1378,129 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
     void persist({ logicFile: null })
   }
 
-  // Same "<count> <name>" plain-text format the Decks list's own Export Deck produces (see
-  // DecksBrowser's handleExport) — deliberately without set/collector-number info, since pasting
-  // into another site's bulk-import box is the actual common case, and this deck is already
-  // fully loaded here so there's no need to re-fetch card data the way the list view has to.
-  function handleExportDeck(): void {
-    if (!storedDeck) return
-    const nameCounts = new Map<string, number>()
-    for (const card of deckCards) {
-      nameCounts.set(card.name, (nameCounts.get(card.name) ?? 0) + 1)
-    }
-    const mainLines = [...nameCounts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => `${count} ${name}`)
-
-    const commanderLines = [`1 ${storedDeck.commanderName}`]
-    if (storedDeck.partnerCommanderId && storedDeck.partnerCommanderName) commanderLines.push(`1 ${storedDeck.partnerCommanderName}`)
-
-    setExportCopied(false)
-    setExportText([...commanderLines, '', ...mainLines].join('\n'))
-    setExportModalOpen(true)
+  function foilOf(card: ScryfallCard, occurrence: number): boolean {
+    return foilIdSet.has(foilKeyFor(card.id, occurrence))
   }
 
-  async function copyExportText(): Promise<void> {
-    await navigator.clipboard.writeText(exportText)
-    setExportCopied(true)
-    window.setTimeout(() => setExportCopied(false), 1500)
+  function commanderSlots(): { card: ScryfallCard; foil: boolean }[] {
+    if (!storedDeck || !commander) return []
+    const slots: { card: ScryfallCard; foil: boolean }[] = [{ card: commander, foil: foilIdSet.has(storedDeck.commanderId) }]
+    if (partnerCommander && storedDeck.partnerCommanderId) {
+      slots.push({ card: partnerCommander, foil: foilIdSet.has(storedDeck.partnerCommanderId) })
+    }
+    return slots
+  }
+
+  function mainDeckSlots(): { card: ScryfallCard; foil: boolean }[] {
+    const occurrenceCount = new Map<string, number>()
+    return deckCards.map((card) => {
+      const occurrence = occurrenceCount.get(card.id) ?? 0
+      occurrenceCount.set(card.id, occurrence + 1)
+      return { card, foil: foilOf(card, occurrence) }
+    })
+  }
+
+  // Collapses same-printing+foil copies into "<count> <name>" lines, alphabetical — the shared
+  // building block behind Plain Text, Arena, and MTGO, which all exchange bare card names
+  // (unlike Moxfield's format, which also carries set/collector/foil — see formatDetailedLines).
+  function formatNameOnlyLines(entries: { card: ScryfallCard }[]): string[] {
+    const counts = new Map<string, number>()
+    for (const { card } of entries) counts.set(card.name, (counts.get(card.name) ?? 0) + 1)
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => `${count} ${name}`)
+  }
+
+  // "<count> <name> (<SET>) <number> [*F*]" — Moxfield's own paste format, and the one
+  // Import Deck List (PDF)/(Moxfield) both parse back (see DETAILED_LINE_RE).
+  function formatDetailedLines(entries: { card: ScryfallCard; foil: boolean }[]): string[] {
+    const counts = new Map<string, { card: ScryfallCard; foil: boolean; count: number }>()
+    for (const { card, foil } of entries) {
+      const key = `${card.name}|||${card.set}|||${card.collector_number}|||${foil}`
+      const existing = counts.get(key)
+      if (existing) existing.count++
+      else counts.set(key, { card, foil, count: 1 })
+    }
+    return [...counts.values()]
+      .sort((a, b) => a.card.name.localeCompare(b.card.name))
+      .map(({ card, foil, count }) => `${count} ${card.name} (${card.set.toUpperCase()}) ${card.collector_number}${foil ? ' *F*' : ''}`)
+  }
+
+  async function copyToClipboard(text: string): Promise<void> {
+    await navigator.clipboard.writeText(text)
+    setShowCopyCheck(true)
+    window.setTimeout(() => setShowCopyCheck(false), 1800)
+  }
+
+  function showInfo(title: string, message: string): void {
+    setInfoModal({ title, message })
+  }
+
+  // The no-assumptions format: every card (commander included) merged into one flat alphabetical
+  // list, name+count only, no sections and no special commander placement — what distinguishes
+  // it from Moxfield (commander-first), Arena (sectioned), and MTGO (commander-last) below.
+  function handleCopyPlainText(): void {
+    if (!storedDeck) return
+    void copyToClipboard(formatNameOnlyLines([...commanderSlots(), ...mainDeckSlots()]).join('\n'))
+  }
+
+  // Commander (and partner) lead, immediately followed by the alphabetical rest — no blank line,
+  // no header — matching Moxfield's own paste format exactly (see the "1 Doctor Doom, King of
+  // Latveria (MSC) 880 *F*" example this was built from).
+  function handleCopyMoxfield(): void {
+    if (!storedDeck || !commander) return
+    const lines = [...formatDetailedLines(commanderSlots()), ...formatDetailedLines(mainDeckSlots())]
+    void copyToClipboard(lines.join('\n'))
+  }
+
+  // Arena's own sectioned format: "About"/"Name <deck>", then "Commander", then "Deck" — no
+  // set/collector info, name-only lines exactly like Plain Text within each section.
+  function handleCopyArena(): void {
+    if (!storedDeck || !commander) return
+    const text = [
+      'About',
+      `Name ${storedDeck.name}`,
+      '',
+      'Commander',
+      ...formatNameOnlyLines(commanderSlots()),
+      '',
+      'Deck',
+      ...formatNameOnlyLines(mainDeckSlots())
+    ].join('\n')
+    void copyToClipboard(text)
+  }
+
+  // MTGO's own convention: the main deck first (alphabetical, name-only), then a blank line,
+  // then the commander last — the mirror image of Moxfield's commander-first ordering.
+  function handleCopyMtgo(): void {
+    if (!storedDeck || !commander) return
+    const text = [...formatNameOnlyLines(mainDeckSlots()), '', ...formatNameOnlyLines(commanderSlots())].join('\n')
+    void copyToClipboard(text)
+  }
+
+  async function handleExportDeckPdf(): Promise<void> {
+    if (!storedDeck || !commander) return
+    // 'normal' (488x680), not 'small' — the thumbnails are big enough on the page that a low-res
+    // source image turns to mush as soon as a PDF viewer is zoomed in on it. The main process
+    // re-encodes down toward the actual draw size before embedding (see resizeForEmbed in
+    // deckExport.ts), so fetching a higher-res source here doesn't bloat the resulting file.
+    const groups = buildDecklistPdfGroups(commanderSlots(), deckCards, foilOf, (card) => scryfallImageUrl(card.id, 'normal'))
+    const commanderArtUrl = commander.image_uris?.art_crop ?? null
+    const account = (await window.api.getCurrentAccount()) as { username: string } | null
+
+    setExportingPdf(true)
+    try {
+      const savedPath = await window.api.exportDeckPdf({
+        deckName: storedDeck.name,
+        commanderArtUrl,
+        colorIdentity: deckColorIdentity,
+        identityName: colorIdentityName(deckColorIdentity),
+        bracket: storedDeck.bracket,
+        accountName: account?.username ?? null,
+        groups
+      })
+      if (savedPath) showInfo('Export Complete', `Saved to ${savedPath}`)
+    } finally {
+      setExportingPdf(false)
+    }
   }
 
   async function toggleCardPool(card: ScryfallCard): Promise<void> {
@@ -1880,13 +2242,24 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
 
         <div className="deck-builder__header-block">
-          <h3 className="section-heading">Import / Export</h3>
+          <h3 className="section-heading">
+            Import / Export
+            <span className={`copy-check ${showCopyCheck ? 'is-visible' : ''}`}>✓</span>
+          </h3>
           <div className="deck-builder__import-export-row">
-            <button className="secondary-button" onClick={() => setImportModalOpen(true)}>
-              Import Deck
+            <button
+              className="secondary-button"
+              onClick={(e) => setImportMenuAnchor({ x: e.clientX, y: e.clientY })}
+              disabled={importingPdf}
+            >
+              {importingPdf ? 'Importing…' : 'Import'}
             </button>
-            <button className="secondary-button" onClick={handleExportDeck}>
-              Export Deck
+            <button
+              className="secondary-button"
+              onClick={(e) => setExportMenuAnchor({ x: e.clientX, y: e.clientY })}
+              disabled={exportingPdf}
+            >
+              {exportingPdf ? 'Exporting…' : 'Export'}
             </button>
           </div>
         </div>
@@ -2670,6 +3043,100 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         />
       )}
 
+      {importMenuAnchor && (
+        <CardContextMenu
+          x={importMenuAnchor.x}
+          y={importMenuAnchor.y}
+          onClose={() => setImportMenuAnchor(null)}
+          actions={[
+            {
+              label: 'Import from Moxfield',
+              onSelect: () => {
+                setImportMenuAnchor(null)
+                setImportMode('moxfield')
+                setImportModalOpen(true)
+              }
+            },
+            {
+              label: 'Import from Arena',
+              onSelect: () => {
+                setImportMenuAnchor(null)
+                setImportMode('arena')
+                setImportModalOpen(true)
+              }
+            },
+            {
+              label: 'Import from MTGO',
+              onSelect: () => {
+                setImportMenuAnchor(null)
+                setImportMode('mtgo')
+                setImportModalOpen(true)
+              }
+            },
+            {
+              label: 'Import Plain Text',
+              onSelect: () => {
+                setImportMenuAnchor(null)
+                setImportMode('plaintext')
+                setImportModalOpen(true)
+              }
+            },
+            {
+              label: 'Import from PDF',
+              onSelect: () => {
+                setImportMenuAnchor(null)
+                void handleImportDeckPdf()
+              }
+            }
+          ]}
+        />
+      )}
+
+      {exportMenuAnchor && (
+        <CardContextMenu
+          x={exportMenuAnchor.x}
+          y={exportMenuAnchor.y}
+          onClose={() => setExportMenuAnchor(null)}
+          actions={[
+            {
+              label: 'Copy for Moxfield',
+              onSelect: () => {
+                setExportMenuAnchor(null)
+                handleCopyMoxfield()
+              }
+            },
+            {
+              label: 'Copy for Arena',
+              onSelect: () => {
+                setExportMenuAnchor(null)
+                handleCopyArena()
+              }
+            },
+            {
+              label: 'Copy for MTGO',
+              onSelect: () => {
+                setExportMenuAnchor(null)
+                handleCopyMtgo()
+              }
+            },
+            {
+              label: 'Copy Plain Text',
+              onSelect: () => {
+                setExportMenuAnchor(null)
+                handleCopyPlainText()
+              }
+            },
+            {
+              label: 'Export to PDF',
+              onSelect: () => {
+                setExportMenuAnchor(null)
+                void handleExportDeckPdf()
+              }
+            }
+          ]}
+        />
+      )}
+
       {basicPipMenu &&
         (() => {
           const snowName = snowNameFor(basicPipMenu.name)
@@ -2904,18 +3371,17 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               ×
             </button>
             <h3 className="section-heading" style={{ marginTop: 0 }}>
-              Import Deck
+              Import from {IMPORT_MODE_LABELS[importMode]}
             </h3>
             <p className="app__hint">
-              Paste a simplified decklist ("count name" per line — the same format Export Deck produces). This
-              becomes the deck's new list — cards already here that aren't in it move to the Card Pool instead of
-              being deleted; everything else is added.
+              {IMPORT_MODE_HINTS[importMode]} This becomes the deck's new list — cards already here that aren't in
+              it move to the Card Pool instead of being deleted; everything else is added.
             </p>
             <textarea
               className="export-deck-modal__textarea"
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder={'1 Sol Ring\n1 Command Tower\n9 Island\n…'}
+              placeholder={IMPORT_MODE_PLACEHOLDERS[importMode]}
               spellCheck={false}
             />
             {importResult && (
@@ -2951,7 +3417,15 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
               <button className="secondary-button" onClick={closeImportModal}>
                 Close
               </button>
-              <button className="primary-button" onClick={handleImportDeck} disabled={importing || !importText.trim()}>
+              <button
+                className="primary-button"
+                onClick={() => {
+                  if (importMode === 'moxfield') void handleImportMoxfield()
+                  else if (importMode === 'arena') void handleImportArena()
+                  else void handleImportNameOnly()
+                }}
+                disabled={importing || !importText.trim()}
+              >
                 {importing ? 'Importing…' : 'Confirm Import'}
               </button>
             </div>
@@ -2959,28 +3433,23 @@ export default function DeckBuilder({ deckId, onBack }: Props) {
         </div>
       )}
 
-      {exportModalOpen && (
-        <div className="card-detail-overlay" onClick={() => setExportModalOpen(false)}>
-          <div className="export-deck-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="card-detail__close" onClick={() => setExportModalOpen(false)}>
+      {infoModal && (
+        <div className="card-detail-overlay" onClick={() => setInfoModal(null)}>
+          <div className="export-deck-modal info-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="card-detail__close" onClick={() => setInfoModal(null)}>
               ×
             </button>
             <h3 className="section-heading" style={{ marginTop: 0 }}>
-              Export — {storedDeck?.name}
+              {infoModal.title}
             </h3>
-            <p className="app__hint">Edit if needed, then copy and paste into another site's import box.</p>
-            <textarea
-              className="export-deck-modal__textarea"
-              value={exportText}
-              onChange={(e) => setExportText(e.target.value)}
-              spellCheck={false}
-            />
+            {infoModal.message.split('\n').map((line, i) => (
+              <p className="app__hint" key={i}>
+                {line}
+              </p>
+            ))}
             <div className="export-deck-modal__actions">
-              <button className="secondary-button" onClick={() => setExportModalOpen(false)}>
-                Close
-              </button>
-              <button className="primary-button" onClick={copyExportText}>
-                {exportCopied ? '✓ Copied!' : 'Copy Text'}
+              <button className="primary-button" onClick={() => setInfoModal(null)}>
+                OK
               </button>
             </div>
           </div>
