@@ -1,6 +1,6 @@
 {
   "name": "biblioplex",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "BiblioPLEX — MTG deck building, card info, and recommendations desktop app",
   "main": "./out/main/index.js",
   "author": "Martyris",
@@ -60,6 +60,10 @@
       {
         "from": "resources/combo-index",
         "to": "combo-index"
+      },
+      {
+        "from": "resources/precons",
+        "to": "precons"
       },
       {
         "from": "resources/pdf-logo.png",

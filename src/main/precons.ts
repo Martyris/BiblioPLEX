@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { getPreconCatalog, getPreconDeckDetail } from './edhrec'
@@ -54,10 +55,32 @@ function preconsPath(): string {
   return join(app.getPath('userData'), 'precons.json')
 }
 
+// A pre-built snapshot shipped with the app itself (see package.json's build.extraResources) —
+// this was the one heavy index that DIDN'T already have this, unlike cardTagIndex.ts's own
+// bundledIndexPath/comboIndex.ts's equivalent, so a fresh install had zero precons and no way
+// to browse any until the user found and ran the several-minutes-long full build themselves (a
+// real user hit exactly this). Same dev/packaged dual-path resolution as those two. "Check for
+// New Precons" always writes to preconsPath() (real userData), which then takes over for good —
+// this bundled copy is only ever consulted when no userData library exists yet, so it can go a
+// little stale between app releases without being a problem: the incremental build tops it up
+// with anything new to EDHREC's catalog in seconds, not minutes.
+function bundledPreconsPath(): string {
+  const devPath = join(app.getAppPath(), 'resources', 'precons', 'precons.json')
+  if (existsSync(devPath)) return devPath
+  return join(process.resourcesPath ?? '', 'precons', 'precons.json')
+}
+
 async function loadFile(): Promise<PreconFile | null> {
   if (memoryFile) return memoryFile
   try {
     const raw = await readFile(preconsPath(), 'utf-8')
+    memoryFile = JSON.parse(raw) as PreconFile
+    return memoryFile
+  } catch {
+    // No userData library yet — fall through to the bundled seed below.
+  }
+  try {
+    const raw = await readFile(bundledPreconsPath(), 'utf-8')
     memoryFile = JSON.parse(raw) as PreconFile
   } catch {
     memoryFile = null
