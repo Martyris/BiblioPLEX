@@ -1,7 +1,10 @@
-// EDHREC has no official API. This scrapes the same JSON blob (__NEXT_DATA__) that their
-// own Next.js frontend renders from — confirmed by inspecting a live commander page. It's
-// undocumented and could break if EDHREC changes their frontend, so every step here fails
-// soft into an EdhrecError rather than throwing.
+// EDHREC has no official API. This reads the page JSON their own frontend loads from
+// json.edhrec.com/pages/<path>.json — the same object that used to sit inside the page's
+// __NEXT_DATA__ blob (props.pageProps.data). In Nov 2026 their site moved to the Next.js app
+// router and the blob disappeared from the HTML, which broke every EDHREC feature; the JSON
+// host kept the old shape, so reading it directly is sturdier than parsing the HTML. It's
+// undocumented and could still change, so every step here fails soft into an EdhrecError
+// rather than throwing.
 const USER_AGENT = 'BiblioPLEX/0.1 (https://github.com/; local dev build)'
 const MIN_INTERVAL_MS = 500 // polite pacing for an unofficial, undocumented source
 
@@ -26,7 +29,7 @@ async function throttledFetch(url: string): Promise<Response> {
     if (wait > 0) await new Promise((r) => setTimeout(r, wait))
     lastRequestAt = Date.now()
     return await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
       signal: AbortSignal.timeout(15_000)
     })
   } finally {
@@ -116,24 +119,23 @@ interface RawCardlist {
   cardviews?: RawCardview[]
 }
 
-/** Fetches an EDHREC page and pulls out its embedded __NEXT_DATA__ JSON blob. */
-async function fetchNextData(url: string): Promise<Record<string, unknown> | EdhrecError> {
-  const res = await throttledFetch(url)
+/** Fetches one EDHREC page's data object, e.g. `commanders/fire-lord-azula` or `precon`. */
+async function fetchPageData(path: string): Promise<Record<string, unknown> | EdhrecError> {
+  const res = await throttledFetch(`https://json.edhrec.com/pages/${path}.json`)
 
-  if (res.status === 404) {
+  // This host answers a page that doesn't exist with 403, not 404.
+  if (res.status === 404 || res.status === 403) {
     return { error: true, status: 404, details: 'Page not found on EDHREC' }
   }
   if (!res.ok) {
     return { error: true, status: res.status, details: `EDHREC returned ${res.status}` }
   }
 
-  const html = await res.text()
-  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s)
-  if (!match) {
-    return { error: true, status: 0, details: 'Could not parse EDHREC page (its layout may have changed)' }
+  try {
+    return (await res.json()) as Record<string, unknown>
+  } catch {
+    return { error: true, status: 0, details: 'Could not parse EDHREC data (its format may have changed)' }
   }
-
-  return JSON.parse(match[1])
 }
 
 function isEdhrecError(x: unknown): x is EdhrecError {
@@ -152,19 +154,15 @@ export async function getCommanderData(
   }
 
   try {
-    const url = tagSlug
-      ? `https://edhrec.com/commanders/${slug}/${encodeURIComponent(tagSlug)}`
-      : `https://edhrec.com/commanders/${slug}`
-    const parsed = await fetchNextData(url)
-    if (isEdhrecError(parsed)) {
+    const path = tagSlug ? `commanders/${slug}/${encodeURIComponent(tagSlug)}` : `commanders/${slug}`
+    const pageData = await fetchPageData(path)
+    if (isEdhrecError(pageData)) {
       const result: EdhrecError =
-        parsed.status === 404 ? { ...parsed, details: 'No EDHREC page found for this commander' } : parsed
+        pageData.status === 404 ? { ...pageData, details: 'No EDHREC page found for this commander' } : pageData
       cache.set(cacheKey, { data: result, at: Date.now() })
       return result
     }
 
-    const pageData = (parsed as { props?: { pageProps?: { data?: Record<string, unknown> } } })?.props?.pageProps
-      ?.data
     const jsonDict = pageData?.container as
       | { json_dict?: { cardlists?: RawCardlist[]; card?: { name?: string; num_decks?: number; rank?: number } } }
       | undefined
@@ -275,14 +273,11 @@ export async function getPreconCatalog(): Promise<EdhrecPreconCatalogEntry[] | E
   }
 
   try {
-    const parsed = await fetchNextData('https://edhrec.com/precon')
-    if (isEdhrecError(parsed)) return parsed
+    const data = await fetchPageData('precon')
+    if (isEdhrecError(data)) return data
 
-    const lists = (
-      parsed as {
-        props?: { pageProps?: { data?: { container?: { json_dict?: { cardlists?: RawCardlist[] } } } } }
-      }
-    )?.props?.pageProps?.data?.container?.json_dict?.cardlists
+    const lists = (data as { container?: { json_dict?: { cardlists?: RawCardlist[] } } }).container?.json_dict
+      ?.cardlists
     if (!lists) return { error: true, status: 0, details: 'Unexpected EDHREC precon catalog shape' }
 
     const entries: EdhrecPreconCatalogEntry[] = []
@@ -322,24 +317,18 @@ export async function getPreconDeckDetail(slug: string): Promise<EdhrecPreconDec
   }
 
   try {
-    const parsed = await fetchNextData(`https://edhrec.com/precon/${encodeURIComponent(slug)}`)
-    if (isEdhrecError(parsed)) return parsed
+    const data = await fetchPageData(`precon/${encodeURIComponent(slug)}`)
+    if (isEdhrecError(data)) return data
 
     const deck = (
-      parsed as {
-        props?: {
-          pageProps?: {
-            data?: {
-              deck?: {
-                commander?: string[]
-                commander_v2?: EdhrecPreconCardTuple[]
-                cards?: Record<string, EdhrecPreconCardTuple[]>
-              }
-            }
-          }
+      data as {
+        deck?: {
+          commander?: string[]
+          commander_v2?: EdhrecPreconCardTuple[]
+          cards?: Record<string, EdhrecPreconCardTuple[]>
         }
       }
-    )?.props?.pageProps?.data?.deck
+    ).deck
     if (!deck) return { error: true, status: 0, details: 'Unexpected EDHREC precon detail shape' }
 
     const cardEntries = Object.values(deck.cards ?? {}).flat()
@@ -373,11 +362,12 @@ export async function getTopCommanders(): Promise<EdhrecTopCommander[] | EdhrecE
   }
 
   try {
-    const parsed = await fetchNextData('https://edhrec.com/commanders')
-    if (isEdhrecError(parsed)) return parsed
+    // /commanders on the site is the "Past 2 Years" list, served as commanders/year.
+    const data = await fetchPageData('commanders/year')
+    if (isEdhrecError(data)) return data
 
-    const lists = (parsed as { props?: { pageProps?: { data?: { container?: { json_dict?: { cardlists?: RawCardlist[] } } } } } })
-      ?.props?.pageProps?.data?.container?.json_dict?.cardlists
+    const lists = (data as { container?: { json_dict?: { cardlists?: RawCardlist[] } } }).container?.json_dict
+      ?.cardlists
     const cardviews = lists?.[0]?.cardviews ?? []
 
     const result: EdhrecTopCommander[] = cardviews.map((c, i) => ({
